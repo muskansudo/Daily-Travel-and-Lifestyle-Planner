@@ -1,5 +1,4 @@
--- Saanjh: wardrobe_items table + wardrobe-photos storage bucket (SRS §10)
--- Run in Supabase SQL Editor after 001_users_onboarding.sql
+-- Saanjh: wardrobe_items table + wardrobe-photos bucket (idempotent / safe to re-run)
 
 CREATE TABLE IF NOT EXISTS public.wardrobe_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -29,23 +28,26 @@ CREATE TRIGGER wardrobe_items_updated_at
 
 ALTER TABLE public.wardrobe_items ENABLE ROW LEVEL SECURITY;
 
--- Wardrobe photo bucket: public read so AuthN'd app can render, service-role only writes
 INSERT INTO storage.buckets (id, name, public)
 VALUES ('wardrobe-photos', 'wardrobe-photos', true)
 ON CONFLICT (id) DO NOTHING;
 
+DROP POLICY IF EXISTS "Public read wardrobe photos" ON storage.objects;
 CREATE POLICY "Public read wardrobe photos"
   ON storage.objects FOR SELECT
   USING (bucket_id = 'wardrobe-photos');
 
+DROP POLICY IF EXISTS "Service upload wardrobe photos" ON storage.objects;
 CREATE POLICY "Service upload wardrobe photos"
   ON storage.objects FOR INSERT
   WITH CHECK (bucket_id = 'wardrobe-photos');
 
+DROP POLICY IF EXISTS "Service update wardrobe photos" ON storage.objects;
 CREATE POLICY "Service update wardrobe photos"
   ON storage.objects FOR UPDATE
   USING (bucket_id = 'wardrobe-photos');
 
+DROP POLICY IF EXISTS "Service delete wardrobe photos" ON storage.objects;
 CREATE POLICY "Service delete wardrobe photos"
   ON storage.objects FOR DELETE
   USING (bucket_id = 'wardrobe-photos');
