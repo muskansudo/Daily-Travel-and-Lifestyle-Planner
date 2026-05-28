@@ -14,6 +14,11 @@ export interface SaanjhUser {
   onboarding_calendar_complete: boolean;
   onboarding_wardrobe_complete: boolean;
   city: string | null;
+  google_access_token: string | null;
+  google_refresh_token: string | null;
+  google_token_expiry: string | null;
+  google_email: string | null;
+  calendar_connected: boolean;
   created_at: string;
   updated_at: string;
 }
