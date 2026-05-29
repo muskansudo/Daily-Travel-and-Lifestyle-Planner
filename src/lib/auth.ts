@@ -26,12 +26,14 @@ export async function getOrCreateDbUser(clerkId: string): Promise<SaanjhUser> {
     clerkUser?.emailAddresses.find(
       (e) => e.id === clerkUser.primaryEmailAddressId
     )?.emailAddress ?? null;
+  const username = clerkUser?.username?.toLowerCase() ?? null;
 
   const { data: created, error } = await supabase
     .from("users")
     .insert({
       clerk_id: clerkId,
       email,
+      username,
     })
     .select("*")
     .single();

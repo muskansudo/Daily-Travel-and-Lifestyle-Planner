@@ -6,6 +6,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 type ClerkUserEvent = {
   data: {
     id: string;
+    username?: string | null;
     email_addresses?: { email_address: string; id: string }[];
     primary_email_address_id?: string | null;
   };
@@ -49,6 +50,7 @@ export async function POST(request: Request) {
   if (event.type === "user.created" || event.type === "user.updated") {
     const clerkId = event.data.id;
     const primaryId = event.data.primary_email_address_id;
+    const username = event.data.username?.toLowerCase() ?? null;
     const email =
       event.data.email_addresses?.find((e) => e.id === primaryId)
         ?.email_address ?? null;
@@ -62,12 +64,13 @@ export async function POST(request: Request) {
     if (existing) {
       await supabase
         .from("users")
-        .update({ email })
+        .update({ email, username })
         .eq("clerk_id", clerkId);
     } else {
       await supabase.from("users").insert({
         clerk_id: clerkId,
         email,
+        username,
       });
     }
   }
