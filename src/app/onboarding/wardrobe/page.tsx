@@ -95,7 +95,16 @@ export default function WardrobeOnboardingPage() {
   return (
     <div className="relative min-h-dvh overflow-hidden font-montserrat">
       <CinematicBackground />
-
+{/* Back button */}
+<button
+  type="button"
+  onClick={() => router.push("/onboarding/calendar")}
+  className="absolute left-6 top-6 z-20 flex items-center gap-1.5 font-montserrat text-sm font-semibold text-on-surface-variant/70 transition-colors hover:text-primary"
+  aria-label="Go back to calendar"
+>
+  <span className="material-symbols-outlined text-[20px]">arrow_back</span>
+  Back
+</button>
       <main className="relative z-10 flex min-h-dvh flex-col items-center px-6 py-10">
         <div className="mt-1 w-full max-w-[540px] animate-soft-rise">
           <header className="mb-10 w-full text-center">

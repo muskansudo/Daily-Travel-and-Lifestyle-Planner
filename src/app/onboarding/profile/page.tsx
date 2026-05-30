@@ -20,12 +20,10 @@ export default function ProfileOnboardingPage() {
     fetch("/api/onboarding/profile")
       .then((r) => r.json())
       .then((data) => {
-        if (data.displayName) setDisplayName(data.displayName);
-        if (data.profilePhotoUrl) setProfilePhotoUrl(data.profilePhotoUrl);
-        if (data.onboardingProfileComplete) {
-          router.replace("/onboarding/preferences");
-        }
-      })
+  if (data.displayName) setDisplayName(data.displayName);
+  if (data.profilePhotoUrl) setProfilePhotoUrl(data.profilePhotoUrl);
+  // Removed auto-redirect so Back button works
+})
       .finally(() => setInitialLoading(false));
   }, [router]);
 

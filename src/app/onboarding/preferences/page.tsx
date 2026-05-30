@@ -53,9 +53,7 @@ export default function PreferencesOnboardingPage() {
         if (data.dietaryTags?.length) setDietary(data.dietaryTags);
         if (data.lifestyleTags?.length) setLifestyle(data.lifestyleTags);
         if (data.interestTags?.length) setInterests(data.interestTags);
-        if (data.onboardingPreferencesComplete) {
-          router.replace("/onboarding/calendar");
-        }
+       
       })
       .finally(() => setInitialLoading(false));
   }, [router]);
@@ -109,6 +107,16 @@ export default function PreferencesOnboardingPage() {
   return (
     <div className="relative min-h-dvh overflow-hidden font-montserrat">
       <CinematicBackground />
+      {/* Back button */}
+<button
+  type="button"
+  onClick={() => router.push("/onboarding/profile")}
+  className="absolute left-6 top-6 z-20 flex items-center gap-1.5 font-montserrat text-sm font-semibold text-on-surface-variant/70 transition-colors hover:text-primary"
+  aria-label="Go back to profile"
+>
+  <span className="material-symbols-outlined text-[20px]">arrow_back</span>
+  Back
+</button>
 
       <main className="relative z-10 flex min-h-dvh flex-col items-center px-6 py-10">
         <div className="w-full max-w-[500px] animate-soft-rise mt-1">

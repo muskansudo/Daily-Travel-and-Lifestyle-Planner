@@ -54,14 +54,21 @@ export default function CalendarOnboardingPage() {
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [googleEmail, setGoogleEmail] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/onboarding/calendar")
       .then((r) => r.json())
       .then((data) => {
-        if (data.onboardingCalendarComplete) {
-          router.replace("/onboarding/wardrobe");
+        if (data.calendarConnected) {
+          setStatus("success");
+          if (data.googleEmail) {
+            setGoogleEmail(data.googleEmail);
+          }
         }
+      })
+      .catch((err) => {
+        console.error("Failed to load existing calendar status:", err);
       })
       .finally(() => setInitialLoading(false));
   }, [router]);
@@ -79,10 +86,19 @@ export default function CalendarOnboardingPage() {
       // Open Google OAuth popup
       const popup = window.open(url, "google_oauth", "width=500,height=600");
 
+      if (!popup) {
+        setStatus("error");
+        setError("Popup blocked. Please allow popups for this website and try again.");
+        return;
+      }
+
       // Listen for success message from callback
       const handler = (e: MessageEvent) => {
         if (e.data?.type === "GOOGLE_AUTH_SUCCESS") {
           setStatus("success");
+          if (e.data.email) {
+            setGoogleEmail(e.data.email);
+          }
           window.removeEventListener("message", handler);
           popup?.close();
           // Navigate to next onboarding step after 1.2s
@@ -156,6 +172,16 @@ export default function CalendarOnboardingPage() {
   return (
     <div className="relative min-h-dvh overflow-hidden font-montserrat">
       <CinematicBackground />
+      {/* Back button */}
+<button
+  type="button"
+  onClick={() => router.push("/onboarding/preferences")}
+  className="absolute left-6 top-6 z-20 flex items-center gap-1.5 font-montserrat text-sm font-semibold text-on-surface-variant/70 transition-colors hover:text-primary"
+  aria-label="Go back to preferences"
+>
+  <span className="material-symbols-outlined text-[20px]">arrow_back</span>
+  Back
+</button>
 
       <main className="relative z-10 flex min-h-dvh flex-col items-center px-6 py-10">
         <div className="mt-1 w-full max-w-[500px] animate-soft-rise">
@@ -181,9 +207,16 @@ export default function CalendarOnboardingPage() {
                 disabled={isConnecting || isSuccess}
                 aria-label="Connect Google Calendar"
               >
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 text-left">
                   <GoogleCalIcon />
-                  <span>Google Calendar</span>
+                  <div className="flex flex-col">
+                    <span>Google Calendar</span>
+                    {isSuccess && googleEmail && (
+                      <span className="text-xs font-normal text-on-surface-variant/70 animate-soft-rise">
+                        Connected as {googleEmail}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   {isConnecting && <Spinner />}
