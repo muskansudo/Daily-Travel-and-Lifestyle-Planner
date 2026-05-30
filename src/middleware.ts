@@ -9,6 +9,7 @@ const isPublicRoute = createRouteMatcher([
   "/sign-up(.*)",
   "/setup",
   "/api/webhooks(.*)",
+  "/api/auth/google/callback",
 ]);
 
 const clerkHandler = clerkMiddleware(async (auth, request) => {

@@ -59,16 +59,21 @@ export async function GET(request: NextRequest) {
 
     // Save tokens in Supabase and mark onboarding step complete
     const supabase = createAdminClient();
+    const updateData: any = {
+      google_access_token: tokens.access_token,
+      google_token_expiry: tokens.expiry_date ? new Date(tokens.expiry_date).toISOString() : null,
+      google_email: profile.email,
+      calendar_connected: true,
+      onboarding_calendar_complete: true,
+    };
+
+    if (tokens.refresh_token) {
+      updateData.google_refresh_token = tokens.refresh_token;
+    }
+
     const { error: dbError } = await supabase
       .from("users")
-      .update({
-        google_access_token: tokens.access_token,
-        google_refresh_token: tokens.refresh_token,
-        google_token_expiry: tokens.expiry_date ? new Date(tokens.expiry_date).toISOString() : null,
-        google_email: profile.email,
-        calendar_connected: true,
-        onboarding_calendar_complete: true,
-      })
+      .update(updateData)
       .eq("id", state);
 
     if (dbError) {
