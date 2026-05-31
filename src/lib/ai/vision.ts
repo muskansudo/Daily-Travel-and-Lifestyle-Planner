@@ -16,7 +16,7 @@ import {
 
 // Model is a constant so we can swap if Groq deprecates the current vision SKU.
 // llama-3.2-11b-vision is the smaller / faster option; bump to 90b for richer tags.
-const GROQ_VISION_MODEL = "llama-3.2-11b-vision-preview";
+const GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
 const GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
 
 const CATEGORY_IDS = WARDROBE_CATEGORIES.map((c) => c.id);
@@ -129,7 +129,7 @@ export async function tagWardrobeImage(
 ): Promise<WardrobeAITags> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
-    // No key configured yet — return safely; page will let user tag manually.
+    console.error("missing groq_api_key in env.local");
     return EMPTY_TAGS;
   }
 
@@ -158,11 +158,15 @@ export async function tagWardrobeImage(
         ],
       }),
     });
-  } catch {
+  } catch (e) {
+    console.error("groq vision req failed:", e);
     return EMPTY_TAGS;
   }
 
-  if (!response.ok) return EMPTY_TAGS;
+  if (!response.ok) {
+    console.error("groq api error:", response.status, await response.text());
+    return EMPTY_TAGS;
+  }
 
   let payload: { choices?: Array<{ message?: { content?: string } }> };
   try {
