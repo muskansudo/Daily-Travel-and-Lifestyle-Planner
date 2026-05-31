@@ -44,14 +44,20 @@ import { generatePlan, type Plan } from "@/lib/ai/plan";
 import {
   findFreeWindows,
   getUpcomingEvents,
+  splitPlanWindows,
   type CalendarEvent,
 } from "@/lib/calendar/events";
+import {
+  manualEntriesToEvents,
+  mergeScheduleEvents,
+} from "@/lib/calendar/manualEvents";
 import { DEFAULT_BIAS_LATLNG } from "@/lib/constants/venues";
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const DEFAULT_HOURS_AHEAD = 16;
 const RAG_TOP_K = 8;
 const MIN_WINDOW_MINUTES = 45; // matches plan.ts allocateSlots floor
+const MAX_PLAN_WINDOW_MINUTES = 180; // plan one chunk at a time, not the whole evening
 // Hard cap so a packed-but-fragmented day doesn't blow up Groq cost on one tap.
 const MAX_WINDOWS_PER_REQUEST = 4;
 
@@ -59,6 +65,15 @@ interface OrchestratorOptions {
   allowedNeighborhoods?: string[];
   allowedCategories?: string[];
   hoursAhead?: number;
+  vibes?: string[];
+  manualEntries?: Array<{
+    id: string;
+    startTime: string;
+    endTime: string;
+    activity: string;
+    explanation?: string;
+    time?: string;
+  }>;
   imageBuffer?: Buffer;
   imageMimeType?: string;
 }
@@ -87,13 +102,19 @@ export async function POST(request: Request) {
 
     // Calendar — events + free windows. Returns [] gracefully on auth/API failure.
     const hoursAhead = options.hoursAhead ?? DEFAULT_HOURS_AHEAD;
-    const events = await getUpcomingEvents(user, { hoursAhead });
-    const freeWindows = findFreeWindows(events, hoursAhead, MIN_WINDOW_MINUTES);
+    const calendarEvents = await getUpcomingEvents(user, { hoursAhead });
+    const manualEvents = manualEntriesToEvents(options.manualEntries ?? []);
+    const events = mergeScheduleEvents(calendarEvents, manualEvents);
+    const freeWindows = splitPlanWindows(
+      findFreeWindows(events, hoursAhead, MIN_WINDOW_MINUTES),
+      MAX_PLAN_WINDOW_MINUTES,
+      MIN_WINDOW_MINUTES
+    );
 
     if (freeWindows.length === 0) {
       return NextResponse.json({
         windows: [],
-        events,
+        events: serialiseEvents(events),
         mood,
         debug: {
           ragTopK: RAG_TOP_K,
@@ -103,6 +124,8 @@ export async function POST(request: Request) {
         },
       });
     }
+
+    const effectiveVibes = resolveVibes(mood, options.vibes);
 
     // Cap windows to keep latency + cost predictable. Sorted earliest-first by
     // findFreeWindows, so we plan the day in chronological order.
@@ -121,7 +144,7 @@ export async function POST(request: Request) {
       const rawCandidates = await retrieveVenues({
         dietaryTags: user.dietary_tags ?? [],
         interestTags: user.interest_tags ?? [],
-        moodVibes: mood?.vibes,
+        moodVibes: effectiveVibes.length > 0 ? effectiveVibes : undefined,
         windowStart: window.start,
         windowEnd: window.end,
         biasLat: biasPoint.lat,
@@ -148,7 +171,7 @@ export async function POST(request: Request) {
       // L3 — plan generation for this specific window.
       const plan = await generatePlan(candidates, {
         freeWindow: window,
-        vibes: mood?.vibes ?? [],
+        vibes: effectiveVibes,
       });
 
       // Mark each picked venue as used so the next window doesn't repeat it.
@@ -162,8 +185,14 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json({
-      windows: planned,
-      events,
+      windows: planned.map((entry) => ({
+        ...entry,
+        freeWindow: {
+          start: entry.freeWindow.start.toISOString(),
+          end: entry.freeWindow.end.toISOString(),
+        },
+      })),
+      events: serialiseEvents(events),
       mood,
       debug: {
         ragTopK: RAG_TOP_K,
@@ -208,6 +237,8 @@ async function parseRequest(request: Request): Promise<OrchestratorOptions> {
       allowedNeighborhoods: parseJsonField(formData.get("allowedNeighborhoods")),
       allowedCategories: parseJsonField(formData.get("allowedCategories")),
       hoursAhead: parseNumberField(formData.get("hoursAhead")),
+      vibes: parseJsonField(formData.get("vibes")),
+      manualEntries: parseManualEntriesField(formData.get("manualEntries")),
       imageBuffer,
       imageMimeType,
     };
@@ -234,7 +265,73 @@ async function parseRequest(request: Request): Promise<OrchestratorOptions> {
       typeof body.hoursAhead === "number" && body.hoursAhead > 0
         ? body.hoursAhead
         : undefined,
+    vibes: Array.isArray(body.vibes)
+      ? (body.vibes as string[]).filter((s) => typeof s === "string")
+      : undefined,
+    manualEntries: parseManualEntries(body.manualEntries),
   };
+}
+
+function parseManualEntries(raw: unknown) {
+  if (!Array.isArray(raw)) return undefined;
+
+  return raw
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      const item = entry as Record<string, unknown>;
+      if (typeof item.id !== "string") return null;
+
+      const startTime =
+        typeof item.startTime === "string"
+          ? item.startTime
+          : typeof item.time === "string"
+            ? item.time
+            : "";
+      const endTime = typeof item.endTime === "string" ? item.endTime : "";
+
+      if (!startTime || !endTime || startTime === endTime) return null;
+      if (typeof item.activity !== "string" || !item.activity.trim()) {
+        return null;
+      }
+
+      return {
+        id: item.id,
+        startTime,
+        endTime,
+        activity: item.activity.trim(),
+        explanation:
+          typeof item.explanation === "string" ? item.explanation : undefined,
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+}
+
+function parseManualEntriesField(raw: FormDataEntryValue | null) {
+  if (typeof raw !== "string" || raw.length === 0) return undefined;
+  try {
+    return parseManualEntries(JSON.parse(raw));
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveVibes(
+  mood: MoodResult | null,
+  requestVibes?: string[]
+): string[] {
+  if (mood?.vibes && mood.vibes.length > 0) return mood.vibes;
+  return requestVibes ?? [];
+}
+
+function serialiseEvents(events: CalendarEvent[]) {
+  return events.map((event) => ({
+    id: event.id,
+    title: event.title,
+    start: event.start.toISOString(),
+    end: event.end.toISOString(),
+    location: event.location,
+    allDay: event.allDay,
+  }));
 }
 
 function parseJsonField(raw: FormDataEntryValue | null): string[] | undefined {

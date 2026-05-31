@@ -1,7 +1,7 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { CinematicBackground } from "@/components/onboarding/CinematicBackground";
 import { StitchGlassPanel } from "@/components/onboarding/StitchGlassPanel";
 import { PremiumButton } from "@/components/ui/PremiumButton";
@@ -48,13 +48,59 @@ const Spinner = () => (
   <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary/20 border-t-primary" />
 );
 
-export default function CalendarOnboardingPage() {
+const GOOGLE_ERROR_MESSAGES: Record<string, string> = {
+  access_denied: "Google sign-in was cancelled.",
+  invalid_callback: "Google returned an invalid response. Please try again.",
+  token_exchange_failed:
+    "Could not complete Google sign-in. Check your OAuth credentials and try again.",
+  unknownerror:
+    "Google could not complete sign-in. Add the redirect URI below to your Google Cloud OAuth client.",
+};
+
+function CalendarOnboardingContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [status, setStatus] = useState<"idle" | "connecting" | "success" | "error">("idle");
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [googleEmail, setGoogleEmail] = useState<string | null>(null);
+  const [redirectUri, setRedirectUri] = useState<string | null>(null);
+
+  useEffect(() => {
+    const googleResult = searchParams.get("google");
+    const email = searchParams.get("email");
+    const reason = searchParams.get("reason");
+
+    if (googleResult === "success") {
+      setStatus("success");
+      if (email) setGoogleEmail(email);
+      router.replace("/onboarding/calendar");
+      const timer = setTimeout(() => {
+        router.push("/onboarding/wardrobe");
+      }, 1200);
+      return () => clearTimeout(timer);
+    }
+
+    if (googleResult === "error") {
+      setStatus("error");
+      const key = reason ?? "unknownerror";
+      setError(
+        GOOGLE_ERROR_MESSAGES[key] ??
+          "Google Authentication failed. Please try again."
+      );
+      router.replace("/onboarding/calendar");
+    }
+  }, [router, searchParams]);
+
+  useEffect(() => {
+    fetch("/api/auth/google/initiate")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.redirectUri) setRedirectUri(data.redirectUri);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     fetch("/api/onboarding/calendar")
@@ -73,60 +119,11 @@ export default function CalendarOnboardingPage() {
       .finally(() => setInitialLoading(false));
   }, [router]);
 
-  const handleGoogleConnect = async () => {
+  const handleGoogleConnect = () => {
     if (status === "connecting" || status === "success") return;
     setStatus("connecting");
     setError(null);
-
-    try {
-      // Trigger backend OAuth flow
-      const res = await fetch("/api/auth/google/initiate");
-      const { url } = await res.json();
-
-      // Open Google OAuth popup
-      const popup = window.open(url, "google_oauth", "width=500,height=600");
-
-      if (!popup) {
-        setStatus("error");
-        setError("Popup blocked. Please allow popups for this website and try again.");
-        return;
-      }
-
-      // Listen for success message from callback
-      const handler = (e: MessageEvent) => {
-        if (e.data?.type === "GOOGLE_AUTH_SUCCESS") {
-          setStatus("success");
-          if (e.data.email) {
-            setGoogleEmail(e.data.email);
-          }
-          window.removeEventListener("message", handler);
-          popup?.close();
-          // Navigate to next onboarding step after 1.2s
-          setTimeout(() => {
-            router.push("/onboarding/wardrobe");
-          }, 1200);
-        }
-        if (e.data?.type === "GOOGLE_AUTH_ERROR") {
-          setStatus("error");
-          setError("Google Authentication failed. Please try again.");
-          window.removeEventListener("message", handler);
-          popup?.close();
-        }
-      };
-
-      window.addEventListener("message", handler);
-
-      // Fallback: if popup is closed manually
-      const pollTimer = setInterval(() => {
-        if (popup?.closed) {
-          clearInterval(pollTimer);
-          setStatus((prev) => (prev === "connecting" ? "idle" : prev));
-        }
-      }, 800);
-    } catch {
-      setStatus("error");
-      setError("Failed to initiate Google Calendar connection.");
-    }
+    window.location.href = "/api/auth/google/initiate?redirect=1";
   };
 
   const handleSkip = useCallback(async () => {
@@ -282,14 +279,38 @@ export default function CalendarOnboardingPage() {
               </button>
               <ProgressDots activeStep={2} />
               {error && (
-                <p className="mt-4 font-montserrat text-sm text-error" role="alert">
-                  {error}
-                </p>
+                <div className="mt-4 space-y-2 text-center" role="alert">
+                  <p className="font-montserrat text-sm text-error">{error}</p>
+                  {redirectUri && (
+                    <p className="font-montserrat text-xs leading-relaxed text-on-surface-variant">
+                      Register this redirect URI in Google Cloud Console →
+                      Credentials → your OAuth client → Authorized redirect
+                      URIs:
+                      <span className="mt-1 block break-all font-mono text-[11px] text-primary">
+                        {redirectUri}
+                      </span>
+                    </p>
+                  )}
+                </div>
               )}
             </footer>
           </StitchGlassPanel>
         </div>
       </main>
     </div>
+  );
+}
+
+export default function CalendarOnboardingPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-dvh items-center justify-center bg-surface font-montserrat text-on-surface-variant">
+          Loading…
+        </div>
+      }
+    >
+      <CalendarOnboardingContent />
+    </Suspense>
   );
 }

@@ -1,8 +1,19 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { google } from "googleapis";
 import { getOrCreateDbUser, requireAuth } from "@/lib/auth";
+import {
+  calendarOAuthReturnUrl,
+  getGoogleRedirectUri,
+} from "@/lib/env/google";
 
-export async function GET() {
+const SCOPES = [
+  "openid",
+  "https://www.googleapis.com/auth/calendar.readonly",
+  "https://www.googleapis.com/auth/userinfo.email",
+  "https://www.googleapis.com/auth/userinfo.profile",
+];
+
+export async function GET(request: NextRequest) {
   const clerkId = await requireAuth();
   if (!clerkId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -16,8 +27,8 @@ export async function GET() {
     if (!clientId || !clientSecret) {
       throw new Error("Missing Google OAuth credentials in environment variables.");
     }
-    // Default to localhost:3000 if not specified
-    const redirectUri = process.env.GOOGLE_REDIRECT_URI || "http://localhost:3000/api/auth/google/callback";
+
+    const redirectUri = getGoogleRedirectUri();
 
     const oauth2Client = new google.auth.OAuth2(
       clientId,
@@ -25,20 +36,18 @@ export async function GET() {
       redirectUri
     );
 
-    const SCOPES = [
-      "https://www.googleapis.com/auth/calendar.readonly",
-      "https://www.googleapis.com/auth/userinfo.email",
-      "https://www.googleapis.com/auth/userinfo.profile",
-    ];
-
     const url = oauth2Client.generateAuthUrl({
       access_type: "offline",
       scope: SCOPES,
       prompt: "consent",
-      state: user.id, // pass database user ID for callback mapping
+      state: user.id,
     });
 
-    return NextResponse.json({ url });
+    if (request.nextUrl.searchParams.get("redirect") === "1") {
+      return NextResponse.redirect(url);
+    }
+
+    return NextResponse.json({ url, redirectUri });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Server error";
     return NextResponse.json({ error: message }, { status: 500 });

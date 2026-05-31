@@ -37,6 +37,16 @@ const WEIGHTS = {
   distance: 0.2,
 } as const;
 
+const IST_TIMEZONE = "Asia/Kolkata";
+const MIN_PLAN_STOP_MINUTES = 45;
+
+const DIETARY_ALIASES: Record<string, string> = {
+  jain: "jain_friendly",
+};
+
+/** Onboarding dietary ids that are not in the venue corpus — skip hard filtering. */
+const NON_VENUE_DIETARY = new Set(["keto"]);
+
 // Earth radius for haversine, in km.
 const EARTH_KM = 6371;
 
@@ -73,9 +83,12 @@ export async function retrieveVenues(inputs: RagInputs): Promise<RagResult[]> {
   //     user wants real vegan options, not "we have a paneer dish."
   //   - Postgres array overlap operator: dietary_tags && ARRAY[...]
   //   - If user has no dietary restriction (or only "no_restrictions"), skip.
-  const strictDiet = inputs.dietaryTags.filter(
-    (t) => t !== "no_restrictions"
-  );
+  // If the user explicitly chose "no restrictions", do not hard-filter venues.
+  const strictDiet = inputs.dietaryTags.includes("no_restrictions")
+    ? []
+    : normalizeDietaryTags(inputs.dietaryTags).filter(
+        (t) => t !== "no_restrictions"
+      );
   if (strictDiet.length > 0) {
     // .overlaps() generates the && operator on text[] columns.
     query = query.overlaps("dietary_tags", strictDiet);
@@ -101,9 +114,13 @@ export async function retrieveVenues(inputs: RagInputs): Promise<RagResult[]> {
     const distanceKm = haversineKm(biasLat, biasLng, Number(v.lat), Number(v.lng));
     const distanceScore = Math.max(0, 1 - distanceKm / MAX_DISTANCE_KM);
 
-    const openNow = inputs.windowStart && inputs.windowEnd
-      ? isOpenDuring(v.opening_hours, inputs.windowStart, inputs.windowEnd)
-      : true; // no window supplied => assume open
+    const openNow = inputs.windowStart
+      ? isOpenForPlanWindow(
+          v.opening_hours,
+          inputs.windowStart,
+          MIN_PLAN_STOP_MINUTES
+        )
+      : true;
 
     // Weighted sum, then multiplied by openNow (0 or 1).
     const base =
@@ -167,40 +184,57 @@ function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): nu
   return EARTH_KM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+function normalizeDietaryTags(tags: string[]): string[] {
+  return tags
+    .map((tag) => DIETARY_ALIASES[tag] ?? tag)
+    .filter((tag) => !NON_VENUE_DIETARY.has(tag));
+}
+
+function getISTMinutesSinceMidnight(d: Date): number {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: IST_TIMEZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+
+  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
+  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
+  return hour * 60 + minute;
+}
+
 /**
- * Parse a venue's opening_hours string and decide whether it's open during
- * the requested [start, end] window.
- *
- * Format we tag in the corpus:
- *   "HH:MM-HH:MM"                   single block
- *   "HH:MM-HH:MM,HH:MM-HH:MM"       split day (lunch + dinner)
- *   Cross-midnight allowed: "17:00-00:30" means open until 00:30 next day.
- *
- * The check passes if ANY of the blocks contains the entire requested window.
- * This is intentionally strict — we'd rather skip a borderline venue than
- * recommend one that closes mid-plan.
+ * Whether a venue is open at the start of a plan window with enough time for one stop.
+ * Uses IST — server timezone must not affect Bangalore planning.
  */
-function isOpenDuring(
+function isOpenForPlanWindow(
   openingHours: string | null,
-  start: Date,
-  end: Date
+  windowStart: Date,
+  minDurationMinutes: number
 ): boolean {
-  if (!openingHours) return true; // unknown hours => trust the corpus tagger
+  if (!openingHours) return true;
+
   const blocks = openingHours.split(",").map((b) => b.trim());
-  const startMin = start.getHours() * 60 + start.getMinutes();
-  const endMinRaw = end.getHours() * 60 + end.getMinutes();
+  const startMin = getISTMinutesSinceMidnight(windowStart);
 
   for (const block of blocks) {
     const m = block.match(/^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/);
     if (!m) continue;
+
     const openMin = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
     let closeMin = parseInt(m[3], 10) * 60 + parseInt(m[4], 10);
-    if (closeMin <= openMin) closeMin += 24 * 60; // crosses midnight
+    if (closeMin <= openMin) closeMin += 24 * 60;
 
-    // Adjust the end-of-window if it crosses midnight relative to start.
-    const endMin = endMinRaw <= startMin ? endMinRaw + 24 * 60 : endMinRaw;
+    let checkStart = startMin;
+    if (checkStart < openMin && closeMin > 24 * 60) {
+      checkStart += 24 * 60;
+    }
 
-    if (openMin <= startMin && endMin <= closeMin) return true;
+    if (checkStart >= openMin && checkStart < closeMin) {
+      const remaining = closeMin - checkStart;
+      if (remaining >= minDurationMinutes) return true;
+    }
   }
+
   return false;
 }

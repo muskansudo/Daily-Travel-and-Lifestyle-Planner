@@ -133,6 +133,34 @@ export function findFreeWindows(
   );
 }
 
+/** Split long gaps into plan-sized chunks so opening-hours checks stay realistic. */
+export function splitPlanWindows(
+  windows: { start: Date; end: Date }[],
+  maxMinutes = 180,
+  minDurationMinutes = 45
+): { start: Date; end: Date }[] {
+  const chunks: { start: Date; end: Date }[] = [];
+
+  for (const window of windows) {
+    let cursor = window.start;
+
+    while (cursor < window.end) {
+      const chunkEnd = new Date(
+        Math.min(cursor.getTime() + maxMinutes * 60_000, window.end.getTime())
+      );
+      const durationMin = (chunkEnd.getTime() - cursor.getTime()) / 60_000;
+
+      if (durationMin >= minDurationMinutes) {
+        chunks.push({ start: cursor, end: chunkEnd });
+      }
+
+      cursor = chunkEnd;
+    }
+  }
+
+  return chunks;
+}
+
 async function persistRefreshedTokens(
   userId: string,
   tokens: { access_token?: string | null; expiry_date?: number | null }
