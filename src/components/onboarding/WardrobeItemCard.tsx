@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { CATEGORY_LABEL, COLOR_SWATCH } from "@/lib/constants/wardrobe";
+import { CATEGORY_LABEL, COLOR_SWATCH, OCCASION_LABEL, SEASON_LABEL} from "@/lib/constants/wardrobe";
 import type { WardrobeItemDTO } from "@/lib/types/wardrobe";
 import { cn } from "@/lib/utils/cn";
 
@@ -44,18 +44,45 @@ export function WardrobeItemCard({
           {CATEGORY_LABEL[item.category]}
         </span>
       )}
+      {/* Occasion + season badges */}
+<div className="absolute left-2 top-10 flex max-w-[75%] flex-wrap gap-1">
+  {item.occasions.slice(0, 2).map((occasion) => (
+    <span
+      key={occasion}
+      className="rounded-full bg-white/80 px-2 py-0.5 font-montserrat text-[8px] font-semibold uppercase tracking-wider text-on-surface backdrop-blur-sm"
+    >
+      {OCCASION_LABEL[occasion]}
+    </span>
+  ))}
 
+  {item.seasons.slice(0, 2).map((season) => (
+    <span
+      key={season}
+      className="rounded-full bg-white/80 px-2 py-0.5 font-montserrat text-[8px] font-semibold uppercase tracking-wider text-on-surface backdrop-blur-sm"
+    >
+      {SEASON_LABEL[season]}
+    </span>
+  ))}
+</div>
       {/* Favorite heart (top-right) */}
       <button
         type="button"
         onClick={onToggleFavorite}
         disabled={pending}
-        className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full border border-white/50 bg-white/70 text-primary shadow-sm backdrop-blur-sm transition-transform hover:scale-105"
+        className={cn(
+  "absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full border border-white/50 shadow-sm backdrop-blur-sm transition-all hover:scale-105",
+  item.isFavorite
+    ? "bg-red-100 text-red-500"
+    : "bg-white/70 text-primary"
+)}
         aria-label={item.isFavorite ? "Unfavourite" : "Favourite"}
         aria-pressed={item.isFavorite}
       >
         <span
-          className="material-symbols-outlined text-[18px]"
+          className={cn(
+  "material-symbols-outlined text-[18px] transition-colors",
+  item.isFavorite ? "text-red-500" : "text-primary"
+)}
           style={{
             fontVariationSettings: item.isFavorite ? "'FILL' 1" : "'FILL' 0",
           }}

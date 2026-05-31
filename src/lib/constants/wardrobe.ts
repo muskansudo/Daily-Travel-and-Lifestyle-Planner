@@ -61,3 +61,11 @@ export const COLOR_SWATCH: Record<string, string> = Object.fromEntries(
 export const CATEGORY_LABEL: Record<string, string> = Object.fromEntries(
   WARDROBE_CATEGORIES.map((c) => [c.id, c.label])
 );
+
+export const OCCASION_LABEL: Record<string, string> = Object.fromEntries(
+  WARDROBE_OCCASIONS.map((o) => [o.id, o.label])
+);
+
+export const SEASON_LABEL: Record<string, string> = Object.fromEntries(
+  WARDROBE_SEASONS.map((s) => [s.id, s.label])
+);
