@@ -72,3 +72,103 @@ export type VenueInterestId = (typeof VENUE_INTERESTS)[number];
 // the user's current location (e.g. plan generation from cold start).
 // Bagmane Tech Park ~ TI India campus.
 export const DEFAULT_BIAS_LATLNG = { lat: 12.9876, lng: 77.6926 } as const;
+
+// ---- Time-of-day vocabulary ----
+//
+// Closed set of buckets a venue can be tagged as fitting (column
+// venues.time_of_day_fit in Supabase). Per-slot retrieval uses this as a HARD
+// FILTER: a 20:00 dinner slot never sees a venue tagged morning-only.
+//
+// Boundaries (IST):
+//   morning   06:00 - 11:00
+//   midday    11:00 - 15:00  (lunch zone)
+//   afternoon 15:00 - 18:00
+//   evening   18:00 - 21:00  (dinner zone)
+//   night     21:00 - 23:00
+//
+// Anything before 06:00 or after 23:00 falls back to the closest bucket — the
+// planner shouldn't be scheduling stops in those hours anyway.
+
+export const TIME_OF_DAY_BUCKETS = [
+  "morning",
+  "midday",
+  "afternoon",
+  "evening",
+  "night",
+] as const;
+
+export type TimeOfDayBucket = (typeof TIME_OF_DAY_BUCKETS)[number];
+
+/**
+ * Map a slot start time to its time-of-day bucket. Uses IST hours regardless
+ * of where the server runs (Vercel is UTC, we plan in IST).
+ */
+export function bucketForHour(date: Date): TimeOfDayBucket {
+  const hourStr = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit",
+    hour12: false,
+  }).format(date);
+  const hour = Number(hourStr.slice(0, 2));
+
+  if (hour < 11) return "morning";
+  if (hour < 15) return "midday";
+  if (hour < 18) return "afternoon";
+  if (hour < 21) return "evening";
+  return "night";
+}
+
+/**
+ * Buckets that bracket the given bucket — used by the fallback chain (design
+ * doc section 10, step 3) when a slot's primary bucket returns zero candidates.
+ * An evening slot widens to afternoon + evening + night before giving up.
+ */
+export function widenBucket(b: TimeOfDayBucket): TimeOfDayBucket[] {
+  switch (b) {
+    case "morning":
+      return ["morning", "midday"];
+    case "midday":
+      return ["morning", "midday", "afternoon"];
+    case "afternoon":
+      return ["midday", "afternoon", "evening"];
+    case "evening":
+      return ["afternoon", "evening", "night"];
+    case "night":
+      return ["evening", "night"];
+  }
+}
+
+// ---- Category-interest locks ----
+//
+// Category diversity (one stop per category per day) is the default rule. But
+// if the user explicitly listed an interest that maps to a single category,
+// that category becomes EXEMPT from the diversity exclusion. A user who picked
+// "cafe_hopping" can and should see multiple cafes in their day.
+//
+// Implementation: when retrieving for slot N, the orchestrator passes the
+// already-used categories as exclusions UNLESS the user's interests intersect
+// with this map's keys, in which case the mapped category is permitted to
+// repeat.
+
+export const CATEGORY_INTEREST_LOCKS: Record<string, VenueCategoryId> = {
+  cafe_hopping: "cafe",
+  night_out: "bar",
+  art: "art",
+  parks: "park",
+};
+
+/**
+ * Given the user's interest tags, return the set of category ids that may
+ * repeat across the day's plan. All other categories are subject to the
+ * one-per-day diversity rule.
+ */
+export function repeatableCategories(
+  userInterests: readonly string[]
+): Set<VenueCategoryId> {
+  const allowed = new Set<VenueCategoryId>();
+  for (const interest of userInterests) {
+    const cat = CATEGORY_INTEREST_LOCKS[interest];
+    if (cat) allowed.add(cat);
+  }
+  return allowed;
+}

@@ -1,15 +1,19 @@
-// Thin Google Calendar wrapper.
+// Thin Google Calendar wrapper + the canonical busy/free interval helpers.
 //
-// Builds on Ananyaa's OAuth flow (src/app/api/auth/google/*). When a user has
-// calendar_connected = true, we use the stored google_access_token (refreshing
-// via google_refresh_token if expired) to read their upcoming events.
+// Two responsibilities live here:
 //
-// The plan generator calls getUpcomingEvents() to know:
-//   - which time windows are free between meetings
-//   - where the user will be (location field on the event, if present)
+//   1. Read events from Google Calendar (getUpcomingEvents). Builds on Ananyaa's
+//      OAuth flow (src/app/api/auth/google/*). When a user has
+//      calendar_connected = true, we use the stored google_access_token
+//      (refreshing via google_refresh_token if expired) to read their upcoming
+//      events. Returns [] on auth/API failure — never throws — so the plan
+//      generator keeps working in manual-only mode.
 //
-// Returns a normalised, demo-safe shape. Never throws on auth failure —
-// returns an empty array so the plan generator can still produce a manual-mode plan.
+//   2. Compute busy intervals + free windows from any event list. This is the
+//      single source of truth for "what is the user actually doing today" that
+//      the orchestrator and the slot allocator both consume. Sleep that crosses
+//      midnight gets mirrored one day back so an early-morning regen doesn't
+//      think 2 AM is free.
 
 import { google } from "googleapis";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -52,9 +56,6 @@ export async function getUpcomingEvents(
       : undefined,
   });
 
-  // If the access token is expired, googleapis will auto-refresh using the
-  // refresh token. We need to persist the new token back so future calls
-  // don't keep refreshing.
   oauth2.on("tokens", (tokens) => {
     void persistRefreshedTokens(user.id, tokens);
   });
@@ -77,7 +78,6 @@ export async function getUpcomingEvents(
     const items = res.data.items ?? [];
     return items
       .map((e): CalendarEvent | null => {
-        // All-day events have `date`; timed events have `dateTime`.
         const startStr = e.start?.dateTime ?? e.start?.date;
         const endStr = e.end?.dateTime ?? e.end?.date;
         if (!startStr || !endStr) return null;
@@ -92,17 +92,57 @@ export async function getUpcomingEvents(
       })
       .filter((x): x is CalendarEvent => x !== null);
   } catch {
-    // Auth expired beyond what refresh can fix, network blip, etc.
-    // Fall back to "no calendar data" — the plan generator handles that.
     return [];
   }
 }
 
-/**
- * Compute free windows between scheduled events within the next `hoursAhead`.
- * Skips all-day events (they shouldn't block the whole day from planning).
- * Used by the plan generator to find slots the AI can fill with venue recs.
- */
+export interface BusyInterval {
+  start: Date;
+  end: Date;
+}
+
+export function buildBusyIntervals(events: CalendarEvent[]): BusyInterval[] {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const intervals: BusyInterval[] = [];
+
+  for (const e of events) {
+    if (e.allDay) continue;
+    intervals.push({ start: e.start, end: e.end });
+    if (spansMidnightIST(e.start, e.end)) {
+      intervals.push({
+        start: new Date(e.start.getTime() - DAY_MS),
+        end: new Date(e.end.getTime() - DAY_MS),
+      });
+    }
+  }
+
+  return intervals.sort((a, b) => a.start.getTime() - b.start.getTime());
+}
+
+function spansMidnightIST(start: Date, end: Date): boolean {
+  const fmt = (d: Date) =>
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(d);
+  return fmt(start) !== fmt(end);
+}
+
+export function overlapsAnyBusy(
+  start: Date,
+  end: Date,
+  busy: BusyInterval[]
+): boolean {
+  const s = start.getTime();
+  const e = end.getTime();
+  for (const b of busy) {
+    if (s < b.end.getTime() && e > b.start.getTime()) return true;
+  }
+  return false;
+}
+
 export function findFreeWindows(
   events: CalendarEvent[],
   hoursAhead = 16,
@@ -110,11 +150,7 @@ export function findFreeWindows(
 ): { start: Date; end: Date }[] {
   const now = new Date();
   const horizon = new Date(now.getTime() + hoursAhead * 3600 * 1000);
-
-  const busy = events
-    .filter((e) => !e.allDay)
-    .map((e) => ({ start: e.start, end: e.end }))
-    .sort((a, b) => a.start.getTime() - b.start.getTime());
+  const busy = buildBusyIntervals(events);
 
   const windows: { start: Date; end: Date }[] = [];
   let cursor = now;
@@ -127,25 +163,19 @@ export function findFreeWindows(
   }
   if (cursor < horizon) windows.push({ start: cursor, end: horizon });
 
-  // Drop windows shorter than minDurationMinutes — not useful for a venue stop.
   return windows.filter(
     (w) => (w.end.getTime() - w.start.getTime()) / 60000 >= minDurationMinutes
   );
 }
 
-/**
- * Free windows inside a fixed IST range (e.g. full calendar day for friend overlap).
- */
+/** Free windows inside a fixed IST range (friends overlap / full day). */
 export function findFreeWindowsInRange(
   events: CalendarEvent[],
   rangeStart: Date,
   rangeEnd: Date,
   minDurationMinutes = 30
 ): { start: Date; end: Date }[] {
-  const busy = events
-    .filter((e) => !e.allDay)
-    .map((e) => ({ start: e.start, end: e.end }))
-    .sort((a, b) => a.start.getTime() - b.start.getTime());
+  const busy = buildBusyIntervals(events);
 
   const windows: { start: Date; end: Date }[] = [];
   let cursor = rangeStart;
@@ -173,7 +203,25 @@ export function findFreeWindowsInRange(
   );
 }
 
-/** Split long gaps into plan-sized chunks so opening-hours checks stay realistic. */
+/** Home orchestrator: pick longest windows first. */
+export function pickPrioritizedWindows(
+  windows: { start: Date; end: Date }[],
+  max: number
+): { start: Date; end: Date }[] {
+  if (max <= 0) return [];
+
+  const ranked = [...windows].sort((a, b) => {
+    const da = a.end.getTime() - a.start.getTime();
+    const db = b.end.getTime() - b.start.getTime();
+    return db - da;
+  });
+
+  return ranked
+    .slice(0, max)
+    .sort((a, b) => a.start.getTime() - b.start.getTime());
+}
+
+/** Friends collab: split long gaps into plan-sized chunks. */
 export function splitPlanWindows(
   windows: { start: Date; end: Date }[],
   maxMinutes = 180,
@@ -201,6 +249,37 @@ export function splitPlanWindows(
   return chunks;
 }
 
+export function hhmmToDateInWindow(hhmm: string, anchor: Date): Date {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(anchor);
+
+  const year = parts.find((p) => p.type === "year")?.value ?? "1970";
+  const month = parts.find((p) => p.type === "month")?.value ?? "01";
+  const day = parts.find((p) => p.type === "day")?.value ?? "01";
+  const anchorHour = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
+  const anchorMinute = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
+
+  const [hourRaw, minuteRaw] = hhmm.split(":");
+  const hour = Number(hourRaw);
+  const minute = Number(minuteRaw ?? 0);
+
+  const base = new Date(
+    `${year}-${month}-${day}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00+05:30`
+  );
+
+  if (hour * 60 + minute < anchorHour * 60 + anchorMinute) {
+    return new Date(base.getTime() + 24 * 60 * 60 * 1000);
+  }
+  return base;
+}
+
 async function persistRefreshedTokens(
   userId: string,
   tokens: { access_token?: string | null; expiry_date?: number | null }
@@ -218,6 +297,6 @@ async function persistRefreshedTokens(
       })
       .eq("id", userId);
   } catch {
-    // Non-fatal — old token will keep working until next refresh.
+    // Non-fatal
   }
 }

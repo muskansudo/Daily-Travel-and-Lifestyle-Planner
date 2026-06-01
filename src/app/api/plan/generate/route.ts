@@ -1,65 +1,84 @@
 // API: POST /api/plan/generate
 //
-// The orchestrator. Looks at the user's whole calendar day, finds every free
-// window long enough to fit a plan, and generates one mini-plan per window.
-// Returns both the plans AND the blocked calendar events so the Home page can
-// render a full interleaved timeline (events + free windows + venue stops).
+// The orchestrator. Builds the day's plan as a sequence of carefully-curated
+// venue stops between the user's busy blocks (manual entries OR Google
+// Calendar events — manual wins when present).
+//
+// Design doc v2 architecture:
+//
+//   1. Read events. Manual entries override calendar; no merging when manual is
+//      provided. Build canonical busy intervals (with overnight sleep mirror).
+//
+//   2. Find free windows (≥60 min). Rank by duration, keep the top 3 — fat
+//      windows beat tiny pre-office gaps.
+//
+//   3. For each prioritized window, carve human-shaped slots (60-90 min, 5-min
+//      boundaries, busy-aware). Scales with window length: 1 stop for short,
+//      up to 4 for a wide-open day.
+//
+//   4. For each slot, run L2 RAG retrieval with time-of-day as a HARD FILTER
+//      and already-used categories as exclusions (with interest-aware
+//      carve-outs). Walk fallback chain on empty.
+//
+//   5. For each slot, run L3 Groq generation to pick one venue from candidates.
+//
+//   6. Final audit pass: drop any stop that overlaps a busy interval. Three
+//      layers of defence — slot allocator + LLM constraint + this filter.
 //
 // Two request modes:
 //
 //   1. JSON  (Content-Type: application/json)
-//        body: {
-//          allowedNeighborhoods?: string[],
-//          allowedCategories?: string[],
-//          hoursAhead?: number,        // default 16
-//        }
-//
 //   2. Multipart (Content-Type: multipart/form-data) — when user uploads a vibe image
-//        fields:
-//          - "image":  File (jpeg/png/webp, <5MB)
-//          - "allowedNeighborhoods": JSON string (optional)
-//          - "allowedCategories":    JSON string (optional)
-//          - "hoursAhead":           string (optional)
 //
 // Response (200):
 //   {
-//     windows: [
-//       { freeWindow, plan, candidatesCount },     // one entry per usable free slot
-//       ...
-//     ],
-//     events:  CalendarEvent[],                    // blocked items for the timeline
-//     mood:    MoodResult | null,                  // shared across windows (one image per request)
-//     debug:   { ragTopK, reason?, totalWindows, plannedWindows }
+//     windows: [{ freeWindow, plan, candidatesCount }, ...],
+//     events:  CalendarEvent[],
+//     mood:    MoodResult | null,
+//     debug:   { ragTopK, reason?, totalWindows, plannedWindows, source }
 //   }
-//
-// Demo story: each layer is honest about what it contributed.
-// "0 windows planned" is distinguishable from "RAG empty" is distinguishable from
-// "all free windows too short" — no silent failures.
 
 import { NextResponse } from "next/server";
 import { getOrCreateDbUser, requireAuth } from "@/lib/auth";
 import { extractMoodFromImage, type MoodResult } from "@/lib/ai/mood";
 import { retrieveVenues } from "@/lib/ai/rag";
-import { generatePlan, type Plan } from "@/lib/ai/plan";
 import {
+  allocateSlots,
+  generatePlanForSlot,
+  type Plan,
+  type PlanStop,
+  type TimeSlot,
+} from "@/lib/ai/plan";
+import {
+  buildBusyIntervals,
   findFreeWindows,
   getUpcomingEvents,
-  splitPlanWindows,
+  hhmmToDateInWindow,
+  overlapsAnyBusy,
+  pickPrioritizedWindows,
+  type BusyInterval,
   type CalendarEvent,
 } from "@/lib/calendar/events";
 import {
   manualEntriesToEvents,
   mergeScheduleEvents,
 } from "@/lib/calendar/manualEvents";
-import { DEFAULT_BIAS_LATLNG } from "@/lib/constants/venues";
+import {
+  bucketForHour,
+  DEFAULT_BIAS_LATLNG,
+  repeatableCategories,
+} from "@/lib/constants/venues";
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const DEFAULT_HOURS_AHEAD = 16;
 const RAG_TOP_K = 8;
-const MIN_WINDOW_MINUTES = 45; // matches plan.ts allocateSlots floor
-const MAX_PLAN_WINDOW_MINUTES = 180; // plan one chunk at a time, not the whole evening
-// Hard cap so a packed-but-fragmented day doesn't blow up Groq cost on one tap.
-const MAX_WINDOWS_PER_REQUEST = 4;
+// SRS rule: ignore free windows under 60 minutes — can't host a 60-min slot.
+const MIN_WINDOW_MINUTES = 60;
+// Cap on planned windows. Combined with the day-wide MAX_TOTAL_STOPS budget,
+// keeps Groq cost predictable on packed days.
+const MAX_PLANNED_WINDOWS = 3;
+// Day-wide AI venue cap. Total stops across all windows in one request.
+const MAX_TOTAL_STOPS = 4;
 
 interface OrchestratorOptions {
   allowedNeighborhoods?: string[];
@@ -100,18 +119,53 @@ export async function POST(request: Request) {
       mood = await extractMoodFromImage(options.imageBuffer, options.imageMimeType);
     }
 
-    // Calendar — events + free windows. Returns [] gracefully on auth/API failure.
+    // ---- Source-of-truth selection (design doc section 7) ----
+    // Manual wins. If the user entered ANY manual events, ignore Google
+    // Calendar entirely. Predictable for demo, eliminates surprise calls
+    // showing up on the timeline.
     const hoursAhead = options.hoursAhead ?? DEFAULT_HOURS_AHEAD;
-    const calendarEvents = await getUpcomingEvents(user, { hoursAhead });
     const manualEvents = manualEntriesToEvents(options.manualEntries ?? []);
-    const events = mergeScheduleEvents(calendarEvents, manualEvents);
-    const freeWindows = splitPlanWindows(
-      findFreeWindows(events, hoursAhead, MIN_WINDOW_MINUTES),
-      MAX_PLAN_WINDOW_MINUTES,
-      MIN_WINDOW_MINUTES
-    );
+    const calendarEvents =
+      manualEvents.length > 0
+        ? []
+        : await getUpcomingEvents(user, { hoursAhead });
+    const events =
+      manualEvents.length > 0
+        ? manualEvents
+        : mergeScheduleEvents(calendarEvents, manualEvents);
+    const scheduleSource: "manual" | "calendar" | "none" =
+      manualEvents.length > 0
+        ? "manual"
+        : calendarEvents.length > 0
+          ? "calendar"
+          : "none";
 
-    if (freeWindows.length === 0) {
+    // Canonical busy intervals — used by allocateSlots inside generatePlan
+    // AND by the final overlap audit pass.
+    const busyIntervals = buildBusyIntervals(events);
+
+    // ---- Empty-input handling (design doc scenario D) ----
+    // No manual + no calendar connection = nothing to anchor a plan against.
+    // The Home page renders a "connect your calendar or add what you're doing"
+    // empty state for this case.
+    if (events.length === 0 && !user.calendar_connected) {
+      return NextResponse.json({
+        windows: [],
+        events: [],
+        mood,
+        debug: {
+          ragTopK: RAG_TOP_K,
+          reason: "no_anchor",
+          totalWindows: 0,
+          plannedWindows: 0,
+          source: scheduleSource,
+        },
+      });
+    }
+
+    // ---- Free window discovery + prioritization ----
+    const allFreeWindows = findFreeWindows(events, hoursAhead, MIN_WINDOW_MINUTES);
+    if (allFreeWindows.length === 0) {
       return NextResponse.json({
         windows: [],
         events: serialiseEvents(events),
@@ -121,45 +175,32 @@ export async function POST(request: Request) {
           reason: "no_free_window",
           totalWindows: 0,
           plannedWindows: 0,
+          source: scheduleSource,
         },
       });
     }
 
+    // Rank free windows by duration DESC, keep the top MAX_PLANNED_WINDOWS,
+    // then re-sort chronologically so the day still reads left-to-right.
+    const windowsToPlan = pickPrioritizedWindows(allFreeWindows, MAX_PLANNED_WINDOWS);
+
     const effectiveVibes = resolveVibes(mood, options.vibes);
+    const userInterests = user.interest_tags ?? [];
+    const repeatableCats = repeatableCategories(userInterests);
 
-    // Cap windows to keep latency + cost predictable. Sorted earliest-first by
-    // findFreeWindows, so we plan the day in chronological order.
-    const windowsToPlan = freeWindows.slice(0, MAX_WINDOWS_PER_REQUEST);
-
-    // Day-wide venue dedupe: a venue picked for the 11am window can't appear in
-    // the 4pm window. usedVenueIds grows as we plan each window in order.
-    const usedVenueIds = new Set<string>();
+    // Day-wide state
+    const usedCategories: string[] = []; // for diversity exclusion
+    const usedVenueIds = new Set<string>(); // for venue dedupe across slots
+    let stopsBudget = MAX_TOTAL_STOPS;
     const planned: PlannedWindow[] = [];
 
     for (const window of windowsToPlan) {
-      const biasPoint = pickBiasPoint(events, window.start);
+      if (stopsBudget <= 0) break;
 
-      // L2 — retrieval. We pull RAG_TOP_K + buffer so we still have candidates
-      // after filtering out venues already used earlier in the day.
-      const rawCandidates = await retrieveVenues({
-        dietaryTags: user.dietary_tags ?? [],
-        interestTags: user.interest_tags ?? [],
-        moodVibes: effectiveVibes.length > 0 ? effectiveVibes : undefined,
-        windowStart: window.start,
-        windowEnd: window.end,
-        biasLat: biasPoint.lat,
-        biasLng: biasPoint.lng,
-        allowedCategories: options.allowedCategories,
-        allowedNeighborhoods: options.allowedNeighborhoods,
-        topK: RAG_TOP_K + usedVenueIds.size, // grow as the day fills up
-      });
-
-      // Filter out venues already booked earlier today.
-      const candidates = rawCandidates
-        .filter((c) => !usedVenueIds.has(c.venue.id))
-        .slice(0, RAG_TOP_K);
-
-      if (candidates.length === 0) {
+      // Carve slots for this window. allocateSlots scales count by window
+      // length; budget caps total day stops.
+      const slots = allocateSlots(window, busyIntervals, stopsBudget);
+      if (slots.length === 0) {
         planned.push({
           freeWindow: window,
           plan: emptyPlan(),
@@ -168,19 +209,67 @@ export async function POST(request: Request) {
         continue;
       }
 
-      // L3 — plan generation for this specific window.
-      const plan = await generatePlan(candidates, {
-        freeWindow: window,
-        vibes: effectiveVibes,
-      });
+      const biasPoint = pickBiasPoint(events, window.start);
+      const stops: PlanStop[] = [];
+      let totalCandidatesSeen = 0;
 
-      // Mark each picked venue as used so the next window doesn't repeat it.
-      for (const stop of plan.stops) usedVenueIds.add(stop.venueId);
+      // Per-slot retrieval + generation.
+      for (const slot of slots) {
+        if (stopsBudget <= 0) break;
+
+        // Categories to exclude for THIS slot: previously used categories,
+        // MINUS any that are explicitly repeatable for this user's interests.
+        // (repeatableCats is a Set<VenueCategoryId>, so .has accepts any
+        // string at runtime — the cast appeases the strict signature.)
+        const excludeCategories = usedCategories.filter(
+          (c) => !(repeatableCats as Set<string>).has(c)
+        );
+
+        const candidates = await retrieveVenues({
+          dietaryTags: user.dietary_tags ?? [],
+          interestTags: userInterests,
+          moodVibes: effectiveVibes.length > 0 ? effectiveVibes : undefined,
+          windowStart: slot.startDate,
+          windowEnd: slot.endDate,
+          biasLat: biasPoint.lat,
+          biasLng: biasPoint.lng,
+          allowedCategories: options.allowedCategories,
+          allowedNeighborhoods: options.allowedNeighborhoods,
+          excludeCategories,
+          timeOfDay: bucketForHour(slot.startDate),
+          topK: RAG_TOP_K + usedVenueIds.size,
+        });
+
+        // Drop venues already used today (day-wide dedupe).
+        const fresh = candidates.filter((c) => !usedVenueIds.has(c.venue.id));
+        if (fresh.length === 0) continue;
+
+        totalCandidatesSeen += fresh.length;
+
+        const stop = await generatePlanForSlot(fresh, slot, effectiveVibes);
+        if (!stop) continue;
+
+        // Final audit: confirm the stop doesn't overlap any busy interval.
+        // The slot allocator already guards this, but the SRS asks for a
+        // final defence-in-depth filter at the orchestrator level.
+        const stopStart = hhmmToDateInWindow(stop.startTime, slot.startDate);
+        const stopEnd = hhmmToDateInWindow(stop.endTime, slot.startDate);
+        if (overlapsAnyBusy(stopStart, stopEnd, busyIntervals)) continue;
+
+        stops.push(stop);
+        usedVenueIds.add(stop.venueId);
+        usedCategories.push(stop.category);
+        stopsBudget -= 1;
+      }
 
       planned.push({
         freeWindow: window,
-        plan,
-        candidatesCount: candidates.length,
+        plan: {
+          stops,
+          summary: "",
+          aiGenerated: stops.length > 0,
+        },
+        candidatesCount: totalCandidatesSeen,
       });
     }
 
@@ -196,9 +285,11 @@ export async function POST(request: Request) {
       mood,
       debug: {
         ragTopK: RAG_TOP_K,
-        totalWindows: freeWindows.length,
+        totalWindows: allFreeWindows.length,
         plannedWindows: planned.length,
-        cappedAt: MAX_WINDOWS_PER_REQUEST,
+        cappedAt: MAX_PLANNED_WINDOWS,
+        maxTotalStops: MAX_TOTAL_STOPS,
+        source: scheduleSource,
       },
     });
   } catch (e) {
@@ -209,10 +300,6 @@ export async function POST(request: Request) {
 
 // ---- Helpers ----
 
-/**
- * Read either JSON or multipart and return a normalised options object.
- * Multipart is detected by Content-Type so the caller doesn't need a flag.
- */
 async function parseRequest(request: Request): Promise<OrchestratorOptions> {
   const contentType = request.headers.get("content-type") ?? "";
 
@@ -244,12 +331,11 @@ async function parseRequest(request: Request): Promise<OrchestratorOptions> {
     };
   }
 
-  // JSON path — no image
   let body: Record<string, unknown> = {};
   try {
     body = (await request.json()) as Record<string, unknown>;
   } catch {
-    // Empty body is fine — caller wants the cold-start plan with no filters.
+    // Empty body is fine.
   }
 
   return {
@@ -353,13 +439,9 @@ function parseNumberField(raw: FormDataEntryValue | null): number | undefined {
 }
 
 /**
- * Bias point for distance scoring within a window. Logic:
- *   - If there's a calendar event ending shortly before this window, prefer its
- *     location so we don't suggest cross-city venues right after a meeting.
- *   - Else default to TI Bagmane campus (Round 2 demo anchor).
- *
- * For Round 2 we always return the default — events.location is free-text, not
- * geocoded. Round 3 polish: geocode event locations.
+ * Bias point for distance scoring. For Round 2 we always return the default
+ * (TI Bagmane). Round 3 polish: geocode event.location to bias near the most
+ * recent meeting.
  */
 function pickBiasPoint(
   _events: CalendarEvent[],
