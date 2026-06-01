@@ -21,7 +21,7 @@
 import { VENUE_VIBES, type VenueVibeId } from "@/lib/constants/venues";
 
 // Same model and endpoint as vision.ts — keep them in sync if Groq deprecates.
-const GROQ_VISION_MODEL = "llama-3.2-11b-vision-preview";
+const GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
 const GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
 
 const VIBE_IDS = VENUE_VIBES;

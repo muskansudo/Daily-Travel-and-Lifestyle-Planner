@@ -68,6 +68,8 @@ import {
   DEFAULT_BIAS_LATLNG,
   repeatableCategories,
 } from "@/lib/constants/venues";
+import { generateOutfit } from "@/lib/ai/outfit";
+import type { WardrobeOccasionId } from "@/lib/constants/wardrobe";
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const DEFAULT_HOURS_AHEAD = 16;
@@ -78,7 +80,7 @@ const MIN_WINDOW_MINUTES = 60;
 // keeps Groq cost predictable on packed days.
 const MAX_PLANNED_WINDOWS = 3;
 // Day-wide AI venue cap. Total stops across all windows in one request.
-const MAX_TOTAL_STOPS = 4;
+const MAX_TOTAL_STOPS = 5;
 
 interface OrchestratorOptions {
   allowedNeighborhoods?: string[];
@@ -153,6 +155,7 @@ export async function POST(request: Request) {
         windows: [],
         events: [],
         mood,
+        outfit: null,
         debug: {
           ragTopK: RAG_TOP_K,
           reason: "no_anchor",
@@ -170,6 +173,7 @@ export async function POST(request: Request) {
         windows: [],
         events: serialiseEvents(events),
         mood,
+        outfit: null,
         debug: {
           ragTopK: RAG_TOP_K,
           reason: "no_free_window",
@@ -273,6 +277,18 @@ export async function POST(request: Request) {
       });
     }
 
+    // L3 (closet) — one Outfit of the Day for the whole plan. This is a
+    // day-level recommendation, not per-slot. We derive an occasion hint from
+    // the day's events/stops (a work meeting => work, a gym block => workout);
+    // the mood vibes drive the rest inside generateOutfit. Returns null when
+    // the closet can't dress the day, and the Home OutfitCard renders its own
+    // empty state for that.
+    const allStops = planned.flatMap((entry) => entry.plan.stops);
+    const outfit = await generateOutfit(user.id, {
+      vibes: effectiveVibes,
+      occasionHint: deriveOccasionHint(events, allStops),
+    });
+
     return NextResponse.json({
       windows: planned.map((entry) => ({
         ...entry,
@@ -283,6 +299,7 @@ export async function POST(request: Request) {
       })),
       events: serialiseEvents(events),
       mood,
+      outfit,
       debug: {
         ragTopK: RAG_TOP_K,
         totalWindows: allFreeWindows.length,
@@ -407,6 +424,34 @@ function resolveVibes(
 ): string[] {
   if (mood?.vibes && mood.vibes.length > 0) return mood.vibes;
   return requestVibes ?? [];
+}
+
+/**
+ * Strong occasion signal for outfit selection, read off the day itself.
+ * Only returns a hint for unambiguous cases — otherwise undefined, and the
+ * mood vibes decide the occasion inside generateOutfit. Conservative on
+ * purpose: a wrong hint is worse than none.
+ */
+function deriveOccasionHint(
+  events: CalendarEvent[],
+  stops: PlanStop[]
+): WardrobeOccasionId | undefined {
+  const text = [
+    ...events.map((e) => e.title),
+    ...stops.map((s) => `${s.category} ${s.venueName}`),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  const WORK =
+    /\b(meeting|office|work|standup|stand-up|client|review|sync|interview|presentation|deadline|1:1)\b/;
+  const WORKOUT = /\b(gym|workout|run|yoga|cycle|cycling|training|fitness|swim)\b/;
+  const FESTIVE = /\b(party|dinner|date|celebration|wedding|festive|drinks|bar|pub|lounge)\b/;
+
+  if (WORK.test(text)) return "work";
+  if (WORKOUT.test(text)) return "workout";
+  if (FESTIVE.test(text)) return "festive";
+  return undefined;
 }
 
 function serialiseEvents(events: CalendarEvent[]) {

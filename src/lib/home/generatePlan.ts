@@ -3,6 +3,7 @@ import type { MoodResult } from "@/lib/ai/mood";
 import type {
   GeneratedPlan,
   ManualScheduleEntry,
+  OutfitRecommendation,
   TimelineItem,
   VenueRecommendation,
 } from "@/lib/types/home";
@@ -37,6 +38,7 @@ export interface PlanGenerateResponse {
   windows: PlannedWindowResponse[];
   events: SerializedCalendarEvent[];
   mood: MoodResult | null;
+  outfit: OutfitRecommendation | null;
   debug: PlanGenerateDebug;
 }
 
@@ -225,7 +227,7 @@ export function buildGeneratedPlanFromResponse(
 
   return {
     timeline: buildTimelineFromResponse(response),
-    outfit: null,
+    outfit: response.outfit ?? null,
     venues: stopsToVenues(allStops),
     response,
   };
