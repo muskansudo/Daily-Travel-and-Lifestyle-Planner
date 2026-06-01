@@ -150,3 +150,52 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ── PROFILE CUSTOM STYLES ── */
+.glass-modal {
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(64px);
+  -webkit-backdrop-filter: blur(64px);
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-top-color: rgba(255, 255, 255, 0.70);
+  box-shadow: 0 20px 60px rgba(139, 78, 60, 0.15);
+}
+
+.glass-ai {
+  background: rgba(196, 158, 236, 0.18);
+  backdrop-filter: blur(48px);
+  -webkit-backdrop-filter: blur(48px);
+  border: 1px solid rgba(196, 158, 236, 0.35);
+  box-shadow: 0 12px 48px rgba(113, 79, 150, 0.18);
+}
+
+.shimmer-ai {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(196, 158, 236, 0.25) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: lavender-shimmer 3s linear infinite;
+}
+
+.silk-divider {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.page-shell {
+  min-height: 100svh;
+  max-width: 600px;
+  margin-inline: auto;
+  padding: 0 24px;
+  padding-bottom: calc(80px + env(safe-area-inset-bottom));
+}
+
+.animate-soft-rise {
+  animation: soft-rise 0.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.animate-sheet-ascend {
+  animation: sheet-ascend 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+}

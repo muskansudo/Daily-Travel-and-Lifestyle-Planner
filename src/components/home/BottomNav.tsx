@@ -13,7 +13,7 @@ const NAV_ITEMS: {
 }[] = [
   { id: "today", label: "Today", icon: "home_app_logo", href: "/home" },
   { id: "friends", label: "Friends", icon: "group", href: "#" },
-  { id: "profile", label: "Profile", icon: "person", href: "#" },
+  { id: "profile", label: "Profile", icon: "person", href: "/profile" },
 ];
 
 export function BottomNav({ activeTab = "today" }: { activeTab?: NavTab }) {

@@ -47,10 +47,17 @@ const config: Config = {
       boxShadow: {
         glow: "0 8px 40px rgba(139, 78, 60, 0.12)",
         "glow-lg": "0 12px 48px rgba(139, 78, 60, 0.18)",
+        "glow-md": "0 4px 24px rgba(255, 181, 160, 0.45)",
+        "glow-ai": "0 12px 48px rgba(113, 79, 150, 0.18)",
+        "glow-focus": "0 0 0 3px rgba(139, 78, 60, 0.15)",
       },
       animation: {
         "soft-rise": "soft-rise 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards",
         aurora: "aurora 32s ease-in-out infinite",
+        "sheet-ascend": "sheet-ascend 0.32s cubic-bezier(0.22, 1, 0.36, 1)",
+        "lavender-shimmer": "lavender-shimmer 3s linear infinite",
+        "aurora-drift": "aurora-drift 20s ease infinite",
+        "breathing-glow": "breathing-glow 4s ease-in-out infinite",
       },
       keyframes: {
         "soft-rise": {
@@ -61,6 +68,25 @@ const config: Config = {
           "0%, 100%": { backgroundPosition: "0% 50%" },
           "50%": { backgroundPosition: "100% 50%" },
         },
+        "sheet-ascend": {
+          "0%": { transform: "translateY(100%)" },
+          "100%": { transform: "translateY(0)" },
+        },
+        "lavender-shimmer": {
+          "0%": { backgroundPosition: "-200% center" },
+          "100%": { backgroundPosition: "200% center" },
+        },
+        "aurora-drift": {
+          "0%, 100%": { backgroundPosition: "0% 50%" },
+          "50%": { backgroundPosition: "100% 50%" },
+        },
+        "breathing-glow": {
+          "0%, 100%": { transform: "scale(1)" },
+          "50%": { transform: "scale(1.05)" },
+        },
+      },
+      maxWidth: {
+        content: "600px",
       },
     },
   },
