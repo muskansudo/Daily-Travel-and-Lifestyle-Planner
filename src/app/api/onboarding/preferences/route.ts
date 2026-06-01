@@ -31,9 +31,52 @@ export async function PATCH(request: Request) {
 
   try {
     const body = await request.json();
+
+    // Standard options IDs from constants
+    const {
+      DIETARY_OPTIONS,
+      LIFESTYLE_OPTIONS,
+      INTEREST_OPTIONS,
+    } = require("@/lib/constants/preferences");
+    
+    const dietaryIds = DIETARY_OPTIONS.map((o: any) => o.id);
+    const lifestyleIds = LIFESTYLE_OPTIONS.map((o: any) => o.id);
+    const interestIds = INTEREST_OPTIONS.map((o: any) => o.id);
+
+    const normalizeTag = (tag: any, allowedIds: string[]) => {
+      if (typeof tag !== "string") return null;
+      const lower = tag.toLowerCase().trim();
+      if (allowedIds.includes(lower)) return lower;
+      
+      // Try replacing spaces and hyphens with underscores
+      const snake = lower.replace(/[\s-]+/g, "_");
+      if (allowedIds.includes(snake)) return snake;
+      
+      return null;
+    };
+
+    const sanitizeTags = (tags: any, allowed: string[]) => {
+      if (!Array.isArray(tags)) return [];
+      return tags
+        .map(t => normalizeTag(t, allowed))
+        .filter((t): t is string => t !== null);
+    };
+
+    if (body.dietaryTags) body.dietaryTags = sanitizeTags(body.dietaryTags, dietaryIds);
+    if (body.lifestyleTags) body.lifestyleTags = sanitizeTags(body.lifestyleTags, lifestyleIds);
+    if (body.interestTags) body.interestTags = sanitizeTags(body.interestTags, interestIds);
+
+    console.log("Onboarding Preferences PATCH Normalized Body:", body);
+
     const parsed = preferencesSchema.safeParse(body);
 
     if (!parsed.success) {
+      const fs = require("fs");
+      fs.writeFileSync("zod-error.log", JSON.stringify({
+        body,
+        errors: parsed.error.flatten()
+      }, null, 2));
+      console.error("Zod Validation Failed. Errors:", JSON.stringify(parsed.error.flatten(), null, 2));
       return NextResponse.json(
         { error: parsed.error.flatten().fieldErrors },
         { status: 400 }

@@ -19,7 +19,6 @@ export async function requireAuth(): Promise<string | null> {
 
 export async function getOrCreateDbUser(clerkId: string): Promise<SaanjhUser> {
   const supabase = createAdminClient();
-  const clerkUser = await currentUser();
 
   const { data: existing } = await supabase
     .from("users")
@@ -31,6 +30,7 @@ export async function getOrCreateDbUser(clerkId: string): Promise<SaanjhUser> {
     return normalizeUser(existing);
   }
 
+  const clerkUser = await currentUser();
   const email =
     clerkUser?.emailAddresses.find(
       (e) => e.id === clerkUser.primaryEmailAddressId
