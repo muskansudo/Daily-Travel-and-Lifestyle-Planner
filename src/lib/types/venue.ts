@@ -12,6 +12,7 @@ export interface Venue {
   dietary_tags: string[];
   vibe_tags: string[];
   interest_tags: string[];
+  time_of_day_fit: string[];
   price_tier: number;
   opening_hours: string | null;
   why_this_short: string;
@@ -30,6 +31,7 @@ export interface VenueDTO {
   dietaryTags: string[];
   vibeTags: string[];
   interestTags: string[];
+  timeOfDayFit: string[];
   priceTier: number;
   openingHours: string | null;
   whyThisShort: string;
@@ -47,6 +49,7 @@ export function toVenueDTO(row: Venue): VenueDTO {
     dietaryTags: row.dietary_tags,
     vibeTags: row.vibe_tags,
     interestTags: row.interest_tags,
+    timeOfDayFit: row.time_of_day_fit ?? [],
     priceTier: row.price_tier,
     openingHours: row.opening_hours,
     whyThisShort: row.why_this_short,
@@ -71,6 +74,17 @@ export interface RagInputs {
   // Filters the caller can tighten
   allowedCategories?: string[];   // e.g. only ['cafe','park'] for a 30-min coffee break
   allowedNeighborhoods?: string[];
+  // Categories to EXCLUDE — used by the orchestrator to enforce day-wide
+  // category diversity. A slot whose primary bucket is "evening" can ask for
+  // candidates while excluding categories already used earlier today.
+  // Note: rag.ts applies the interest-aware-repeat carve-out (cafe_hopping
+  // users keep seeing cafes even if a cafe was already used).
+  excludeCategories?: string[];
+  // Time-of-day bucket the slot falls into (morning/midday/afternoon/evening/
+  // night). Used as a HARD FILTER on venue.time_of_day_fit. When the primary
+  // bucket returns zero candidates, rag.ts widens to adjacent buckets per the
+  // fallback chain (design doc section 10).
+  timeOfDay?: string;
   // How many candidates to return (default 8 — enough for L3 LLM to build a varied plan)
   topK?: number;
 }

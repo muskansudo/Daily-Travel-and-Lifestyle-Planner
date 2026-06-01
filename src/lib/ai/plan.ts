@@ -1,28 +1,40 @@
 // L3 Plan generation — Saanjh's grounded LLM layer
 //
-// Input: time window + vibes + RagResult[] from rag.ts (already scored, filtered, ranked).
-// Output: a 1-4 stop plan with timing, venue refs, and grounded why-this lines.
+// Architecture under the v2 design (design doc sections 4, 9):
+//   - The orchestrator (route.ts) calls allocateSlots() ONCE per window to
+//     carve human-shaped slots (60-90 min, 5-min boundaries, busy-aware).
+//   - Then for EACH slot, the orchestrator calls retrieveVenues() with the
+//     slot's time-of-day bucket as a hard filter, and passes the candidate
+//     set to generatePlanForSlot() which picks ONE venue for ONE slot.
+//   - Per-slot generation is more LLM calls (one per slot) but each call is
+//     tiny and tightly scoped — output is dramatically more curated.
 //
 // What's deterministic (code-owned):
-//   - Time slot allocation. Window length sets stop count, slots evenly spaced
-//     with a 20-min transit buffer. LLM never does time math.
-//   - Venue picks must come from the input RagResult set. Sanitiser rejects any
-//     venue id not in the input. No hallucinated venues survive.
+//   - Slot allocation. Window length sets stop count (1-4), each slot is
+//     60-90 min on a 5-min boundary. Multi-stop windows divide into equal
+//     phases so stops are spread ~3h apart on a wide-open day, not clustered.
+//   - Hard guard: a slot is dropped if it overlaps any busy interval.
+//   - Venue picks must come from the input RagResult set. Sanitiser rejects
+//     any venue id not in the candidate list. No hallucinated venues survive.
 //   - Times formatted in IST regardless of server timezone (Vercel runs UTC).
 //
 // What's LLM-owned:
-//   - Picking WHICH of the top-K venues fit which slots (in order).
+//   - Picking WHICH venue from the top-K fits the slot.
 //   - Writing the whyThis line, grounded in venue.whyThisShort sensory tag.
-//   - One-line summary.
 //
-// Fallback: EMPTY_PLAN with aiGenerated: false when Groq fails. UI decides
-// between empty state and retry — demo-safe by design.
+// Fallback: returns null when Groq fails. Orchestrator decides what to do
+// (typically: try once more or skip the slot).
 
 import type { RagResult } from "@/lib/types/venue";
+import {
+  overlapsAnyBusy,
+  type BusyInterval,
+} from "@/lib/calendar/events";
+import { bucketForHour } from "@/lib/constants/venues";
 
 // NOTE: Verify model name at console.groq.com/models before relying on it.
 // Groq has rotated names — if this 404s, swap and the fallback kicks in
-// silently (plan goes empty). Check Groq logs if demo behaves oddly.
+// silently (stop becomes null). Check Groq logs if demo behaves oddly.
 const GROQ_MODEL = "llama-3.3-70b-versatile";
 const GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -32,6 +44,16 @@ const GROQ_TEMPERATURE = 0.3;
 
 // IST formatting — Vercel servers run in UTC, so we explicitly format here.
 const IST_TIMEZONE = "Asia/Kolkata";
+
+// Slot duration policy. Design doc section 9.
+const MIN_SLOT_MIN = 60;
+const PREFERRED_SLOT_MIN = 75;
+const MAX_SLOT_MIN = 90;
+const SLOT_BUFFER_MIN = 15;
+// Window thresholds for stop-count scaling.
+const TWO_STOP_MIN_WINDOW = 2 * PREFERRED_SLOT_MIN + SLOT_BUFFER_MIN;
+const THREE_STOP_MIN_WINDOW = 330; // 5.5h
+const FOUR_STOP_MIN_WINDOW = 540; // 9h
 
 export interface PlanStop {
   venueId: string;
@@ -49,57 +71,141 @@ export interface Plan {
   aiGenerated: boolean;
 }
 
-export interface PlanContext {
-  freeWindow: { start: Date; end: Date };
-  vibes: string[];
-  neighborhood?: string;
-}
-
-const EMPTY_PLAN: Plan = {
-  stops: [],
-  summary: "",
-  aiGenerated: false,
-};
-
-interface TimeSlot {
+export interface TimeSlot {
   startTime: string;
   endTime: string;
+  // Date forms kept so the orchestrator can re-validate against busy intervals
+  // without re-parsing HH:MM strings. Not serialised out to the client.
+  startDate: Date;
+  endDate: Date;
 }
+
+/**
+ * Carve a free window into 1-4 venue slots.
+ *
+ *   - 60-min minimum, 90-min maximum, 75-min preferred slot duration.
+ *   - 5-min boundary alignment on slot start times.
+ *   - Stop count scales with window length:
+ *       60-164 min   → 1 stop
+ *       165-329 min  → 2 stops
+ *       330-539 min  → 3 stops
+ *       540+ min     → 4 stops
+ *   - Multi-stop windows divide into equal phases. Anchor a 75-min slot at
+ *     the start of each phase — gives 3+ hour gaps between stops naturally.
+ *   - Hard guard: any slot that overlaps a busy interval is dropped.
+ *   - Per-window stop count never exceeds the day-wide `maxStops` budget the
+ *     orchestrator passes in.
+ */
+export function allocateSlots(
+  window: { start: Date; end: Date },
+  busy: BusyInterval[],
+  maxStops: number
+): TimeSlot[] {
+  if (maxStops <= 0) return [];
+
+  const cursor = roundUpToFiveMin(window.start);
+  const usableMin = (window.end.getTime() - cursor.getTime()) / 60_000;
+  if (usableMin < MIN_SLOT_MIN) return [];
+
+  const naturalStops =
+    usableMin >= FOUR_STOP_MIN_WINDOW
+      ? 4
+      : usableMin >= THREE_STOP_MIN_WINDOW
+        ? 3
+        : usableMin >= TWO_STOP_MIN_WINDOW
+          ? 2
+          : 1;
+
+  const wantStops = Math.min(maxStops, naturalStops);
+
+  if (wantStops === 1) {
+    const dur = clampMultiple(
+      Math.min(MAX_SLOT_MIN, usableMin),
+      5,
+      MIN_SLOT_MIN
+    );
+    if (dur < MIN_SLOT_MIN) return [];
+    const slotEnd = new Date(cursor.getTime() + dur * 60_000);
+    if (overlapsAnyBusy(cursor, slotEnd, busy)) return [];
+    return [makeSlot(cursor, slotEnd)];
+  }
+
+  // Multi-stop: divide window into N equal phases, anchor a 75-min slot at
+  // the start of each phase.
+  const windowEndMs = window.end.getTime();
+  const phaseMin = usableMin / wantStops;
+  const slots: TimeSlot[] = [];
+
+  for (let i = 0; i < wantStops; i++) {
+    const slotStartRaw = new Date(cursor.getTime() + i * phaseMin * 60_000);
+    const slotStart = roundUpToFiveMin(slotStartRaw);
+    const slotEnd = new Date(slotStart.getTime() + PREFERRED_SLOT_MIN * 60_000);
+
+    if (slotEnd.getTime() > windowEndMs) continue;
+    if (overlapsAnyBusy(slotStart, slotEnd, busy)) continue;
+
+    slots.push(makeSlot(slotStart, slotEnd));
+  }
+
+  return slots;
+}
+
+function makeSlot(start: Date, end: Date): TimeSlot {
+  return {
+    startTime: fmtHHMM(start),
+    endTime: fmtHHMM(end),
+    startDate: start,
+    endDate: end,
+  };
+}
+
+function roundUpToFiveMin(d: Date): Date {
+  const step = 5 * 60_000;
+  return new Date(Math.ceil(d.getTime() / step) * step);
+}
+
+function clampMultiple(value: number, step: number, floor: number): number {
+  const snapped = Math.floor(value / step) * step;
+  return snapped < floor ? 0 : snapped;
+}
+
+// ---- LLM stop generation ----
 
 const SYSTEM_PROMPT = `You are a Bangalore lifestyle curator for Saanjh, a daily life navigator for India.
 
 Style:
 - Editorial Indian, calm, observed. Not generic AI fluff.
 - No "you'll love", no emoji, no exclamation marks.
-- Max 20 words per whyThis. Short, sensory, specific.
+- Max 20 words for whyThis. Short, sensory, specific.
 
 Critical rule on whyThis:
 - The whyThis line MUST be a rephrasing or excerpt of the venue's provided sensory tag.
 - Do not invent details. Do not add facts not present in the tag.
-- If the tag mentions "fig trees and strong wifi", whyThis can talk about fig trees and wifi. Nothing else.
+
+You will receive ONE time slot and a small list of pre-filtered venue options. Pick the ONE venue that best fits the slot's time of day and the user's mood.
 
 Return strict JSON only:
-{
-  "stops": [{ "venueId": "...", "whyThis": "..." }],
-  "summary": "one-line plan description, max 15 words"
-}
+{ "venueId": "...", "whyThis": "..." }
 
-Pick exactly the number of stops requested. Do not repeat venues. Use only venueIds from the provided list.`;
+Use only a venueId from the provided list. Never invent.`;
 
-export async function generatePlan(
+/**
+ * Pick one venue for one slot. Returns a PlanStop on success, null on any
+ * Groq failure or parse error. The orchestrator decides what to do with null
+ * (typically: skip the slot — the SRS allows partial plans).
+ */
+export async function generatePlanForSlot(
   candidates: RagResult[],
-  context: PlanContext
-): Promise<Plan> {
-  if (candidates.length === 0) return EMPTY_PLAN;
-
-  const slots = allocateSlots(context.freeWindow);
-  if (slots.length === 0) return EMPTY_PLAN;
+  slot: TimeSlot,
+  vibes: string[]
+): Promise<PlanStop | null> {
+  if (candidates.length === 0) return null;
 
   const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) return EMPTY_PLAN;
+  if (!apiKey) return null;
 
-  const timeOfDay = deriveTimeOfDay(context.freeWindow.start);
-  const userPrompt = buildUserPrompt(candidates, context.vibes, timeOfDay, slots);
+  const timeOfDay = bucketForHour(slot.startDate);
+  const userPrompt = buildSlotPrompt(candidates, vibes, timeOfDay, slot);
 
   let response: Response;
   try {
@@ -112,7 +218,7 @@ export async function generatePlan(
       body: JSON.stringify({
         model: GROQ_MODEL,
         temperature: GROQ_TEMPERATURE,
-        max_tokens: 512,
+        max_tokens: 256,
         response_format: { type: "json_object" },
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
@@ -121,84 +227,36 @@ export async function generatePlan(
       }),
     });
   } catch {
-    return EMPTY_PLAN;
+    return null;
   }
 
-  if (!response.ok) return EMPTY_PLAN;
+  if (!response.ok) return null;
 
   let payload: { choices?: Array<{ message?: { content?: string } }> };
   try {
     payload = await response.json();
   } catch {
-    return EMPTY_PLAN;
+    return null;
   }
 
   const content = payload.choices?.[0]?.message?.content;
-  if (!content) return EMPTY_PLAN;
+  if (!content) return null;
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(content);
   } catch {
-    return EMPTY_PLAN;
+    return null;
   }
 
-  return sanitisePlan(parsed, candidates, slots);
+  return sanitiseStop(parsed, candidates, slot);
 }
 
-function allocateSlots(window: { start: Date; end: Date }): TimeSlot[] {
-  const totalMin = (window.end.getTime() - window.start.getTime()) / 60000;
-  if (totalMin < 45) return [];
-
-  const stopCount =
-    totalMin < 90 ? 1 : totalMin < 180 ? 2 : totalMin < 300 ? 3 : 4;
-
-  const bufferMin = 20;
-  const perStop = (totalMin - bufferMin * (stopCount - 1)) / stopCount;
-
-  const slots: TimeSlot[] = [];
-  let cursor = new Date(window.start);
-  for (let i = 0; i < stopCount; i++) {
-    const slotEnd = new Date(cursor.getTime() + perStop * 60000);
-    slots.push({
-      startTime: fmtHHMM(cursor),
-      endTime: fmtHHMM(slotEnd),
-    });
-    cursor = new Date(slotEnd.getTime() + bufferMin * 60000);
-  }
-  return slots;
-}
-
-function deriveTimeOfDay(d: Date): "morning" | "afternoon" | "evening" | "night" {
-  // Use IST hour so the time-of-day prompt cue matches what the user is experiencing.
-  const hourStr = new Intl.DateTimeFormat("en-IN", {
-    timeZone: IST_TIMEZONE,
-    hour: "2-digit",
-    hour12: false,
-  }).format(d);
-  const h = parseInt(hourStr, 10);
-  if (h < 11) return "morning";
-  if (h < 16) return "afternoon";
-  if (h < 20) return "evening";
-  return "night";
-}
-
-// Format any Date as IST HH:MM, regardless of server timezone.
-// en-GB locale gives 24h "HH:MM" cleanly; en-IN sometimes adds AM/PM.
-function fmtHHMM(d: Date): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: IST_TIMEZONE,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(d);
-}
-
-function buildUserPrompt(
+function buildSlotPrompt(
   candidates: RagResult[],
   vibes: string[],
   timeOfDay: string,
-  slots: TimeSlot[]
+  slot: TimeSlot
 ): string {
   const venueCards = candidates
     .map(
@@ -208,66 +266,52 @@ function buildUserPrompt(
     .join("\n");
 
   return `Time of day: ${timeOfDay}
+Slot: ${slot.startTime}-${slot.endTime} IST
 Mood vibes: ${vibes.length ? vibes.join(", ") : "open"}
-Stops needed: ${slots.length}
-Time slots (IST): ${slots.map((s, i) => `${i + 1}. ${s.startTime}-${s.endTime}`).join(" | ")}
 
 Available venues:
 ${venueCards}
 
-Pick ${slots.length} venue${slots.length > 1 ? "s" : ""} in order, one per slot. Ground each whyThis in that venue's actual sensory tag.`;
+Pick ONE venue id that best fits a ${timeOfDay} slot for this mood. Ground whyThis in that venue's actual sensory tag.`;
 }
 
-function sanitisePlan(
+function sanitiseStop(
   raw: unknown,
   candidates: RagResult[],
-  slots: TimeSlot[]
-): Plan {
-  if (!raw || typeof raw !== "object") return EMPTY_PLAN;
+  slot: TimeSlot
+): PlanStop | null {
+  if (!raw || typeof raw !== "object") return null;
   const obj = raw as Record<string, unknown>;
-  if (!Array.isArray(obj.stops)) return EMPTY_PLAN;
+  if (typeof obj.venueId !== "string") return null;
 
-  // Map from venue id -> full VenueDTO so we can hydrate name/category/etc.
   const venueMap = new Map(candidates.map((r) => [r.venue.id, r.venue]));
-  const seen = new Set<string>();
-  const stops: PlanStop[] = [];
+  const venue = venueMap.get(obj.venueId);
+  if (!venue) return null;
 
-  for (let i = 0; i < slots.length; i++) {
-    const s = obj.stops[i];
-    if (!s || typeof s !== "object") continue;
-    const stop = s as Record<string, unknown>;
-    if (typeof stop.venueId !== "string") continue;
-
-    const venue = venueMap.get(stop.venueId);
-    if (!venue || seen.has(venue.id)) continue;
-    seen.add(venue.id);
-
-    const rawWhy = typeof stop.whyThis === "string" ? stop.whyThis : "";
-    const whyThis = truncateWords(rawWhy, 20);
-
-    // If the LLM returned an empty whyThis, fall back to the venue's tag.
-    // Better a slightly less curated line than a visibly broken card.
-    const finalWhyThis = whyThis.length > 0 ? whyThis : venue.whyThisShort;
-
-    stops.push({
-      venueId: venue.id,
-      venueName: venue.name,
-      category: venue.category,
-      neighborhood: venue.neighborhood,
-      startTime: slots[i].startTime,
-      endTime: slots[i].endTime,
-      whyThis: finalWhyThis,
-    });
-  }
-
-  if (stops.length === 0) return EMPTY_PLAN;
+  const rawWhy = typeof obj.whyThis === "string" ? obj.whyThis : "";
+  const whyThis = truncateWords(rawWhy, 20);
+  const finalWhyThis = whyThis.length > 0 ? whyThis : venue.whyThisShort;
 
   return {
-    stops,
-    summary:
-      typeof obj.summary === "string" ? obj.summary.slice(0, 120).trim() : "",
-    aiGenerated: true,
+    venueId: venue.id,
+    venueName: venue.name,
+    category: venue.category,
+    neighborhood: venue.neighborhood,
+    startTime: slot.startTime,
+    endTime: slot.endTime,
+    whyThis: finalWhyThis,
   };
+}
+
+// ---- Formatting helpers ----
+
+function fmtHHMM(d: Date): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: IST_TIMEZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(d);
 }
 
 function truncateWords(s: string, maxWords: number): string {
