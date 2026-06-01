@@ -1,23 +1,35 @@
 // L2 Retrieval — Saanjh's RAG layer
 //
-// Architecture: hand-tagged Bangalore venue corpus in Supabase (Postgres GIN indexes
-// on tag arrays). Retrieval is two-phase:
+// Architecture: hand-tagged Bangalore venue corpus in Supabase (Postgres GIN
+// indexes on tag arrays). Per-slot retrieval — the orchestrator calls this once
+// per slot in the day's plan, passing the slot's time-of-day bucket as a HARD
+// FILTER. A 20:00 dinner slot never sees a venue tagged morning-only.
 //
-//   1. HARD FILTERS (SQL): dietary constraint, allowed categories/neighborhoods,
-//      and opening-hours bounded by the requested time window. Anything that
-//      violates a user's stated dietary need is dropped — we don't rank-then-hope.
+// Retrieval pipeline:
 //
-//   2. SOFT SCORING (in-process): rank remaining candidates by a weighted sum of
-//      interest overlap, vibe overlap (from the L1 mood image), distance from the
-//      bias point (haversine), and whether the venue is open during the window.
+//   1. HARD FILTERS (SQL): dietary, allowed categories/neighborhoods, time-of-
+//      day bucket overlap, category exclusion (for day-wide diversity).
+//      Anything that violates a hard filter is dropped — we don't rank-then-hope.
 //
-// Why not vector embeddings:
-//   - Corpus is small (~80 venues) and hand-tagged. Set overlap beats cosine here.
-//   - Tags are explainable: every recommendation can produce a "why this" trace.
-//   - Demo is scripted; engine is real: same inputs always produce the same plan.
+//   2. SOFT SCORING (in-process): weighted sum of interest overlap, vibe
+//      overlap (from L1 mood image), and distance from the bias point. Open-
+//      hours acts multiplicatively (drops score to 0 when closed).
 //
-// L3 (Groq generation) consumes the top-K RagResult[] and grounds its plan output
-// in these specific venues. The LLM is never asked to invent a venue.
+//   3. INTEREST COVERAGE: bucket the top-scored candidates by which user
+//      interest they best match. Take 1 from each interest bucket first, then
+//      fill remaining slots by raw score. Ensures a coffee + art + walks user
+//      sees variety, not 8 cafes.
+//
+//   4. INTERNAL FALLBACK CHAIN: if the initial query returns zero, retry with
+//      relaxed constraints (drop category exclusion, drop interest coverage,
+//      widen time bucket). Critical with our 79-venue corpus — the orchestrator
+//      depends on retrieval to always come back with something pickable.
+//
+// Why not vector embeddings: corpus is small and hand-tagged, set overlap beats
+// cosine here, and every recommendation produces an explainable "why this".
+//
+// L3 (Groq generation) consumes the top-K RagResult[] and grounds its plan
+// output in these specific venues. The LLM never invents a venue.
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
@@ -26,15 +38,19 @@ import {
   type RagResult,
   type Venue,
 } from "@/lib/types/venue";
-import { DEFAULT_BIAS_LATLNG } from "@/lib/constants/venues";
+import {
+  DEFAULT_BIAS_LATLNG,
+  widenBucket,
+  type TimeOfDayBucket,
+} from "@/lib/constants/venues";
 
-// Scoring weights — tuned for the Round 2 demo. Tweak here, not in callers.
-// Sum to 1.0 for readability; the openNow signal is multiplicative (drops to 0
-// when closed) rather than additive, so it isn't in the sum.
+// Scoring weights. Design doc section 6: interest dominates because time-of-day
+// is already a hard filter and category diversity is enforced by the
+// orchestrator — weights only matter for tiebreaks within an already-curated set.
 const WEIGHTS = {
-  interest: 0.45,
-  vibe: 0.35,
-  distance: 0.2,
+  interest: 0.6,
+  vibe: 0.3,
+  distance: 0.1,
 } as const;
 
 const IST_TIMEZONE = "Asia/Kolkata";
@@ -55,42 +71,115 @@ const EARTH_KM = 6371;
 const MAX_DISTANCE_KM = 8;
 
 /**
- * Public entry point. Takes user signals + optional time window, returns ranked
+ * Public entry point. Takes user signals + slot context, returns ranked
  * venues with per-signal breakdowns. Deterministic — same inputs → same outputs.
+ *
+ * Walks the fallback chain (design doc section 10) automatically:
+ *   step 1: full filters (time bucket + category exclusion + interest coverage)
+ *   step 2: drop category exclusion
+ *   step 3: drop interest coverage
+ *   step 4: widen time bucket
+ * Returns whatever the first non-empty step produces.
  */
 export async function retrieveVenues(inputs: RagInputs): Promise<RagResult[]> {
   const topK = inputs.topK ?? 8;
+  const bucket = inputs.timeOfDay as TimeOfDayBucket | undefined;
+
+  // Step 1: tightest possible filter — primary bucket + category exclusion +
+  // interest coverage applied during ranking.
+  let results = await fetchAndScore(inputs, {
+    buckets: bucket ? [bucket] : undefined,
+    excludeCategories: inputs.excludeCategories ?? [],
+  });
+  if (results.length > 0) {
+    return applyInterestCoverage(results, inputs.interestTags, topK);
+  }
+
+  // Step 2: drop category exclusion. Better a repeated category than an empty slot.
+  results = await fetchAndScore(inputs, {
+    buckets: bucket ? [bucket] : undefined,
+    excludeCategories: [],
+  });
+  if (results.length > 0) {
+    return applyInterestCoverage(results, inputs.interestTags, topK);
+  }
+
+  // Step 3: drop interest coverage. Just take top-K by raw score.
+  results = await fetchAndScore(inputs, {
+    buckets: bucket ? [bucket] : undefined,
+    excludeCategories: [],
+  });
+  if (results.length > 0) {
+    return results.slice(0, topK);
+  }
+
+  // Step 4: widen the time bucket. An evening slot now accepts afternoon +
+  // evening + night venues.
+  if (bucket) {
+    results = await fetchAndScore(inputs, {
+      buckets: widenBucket(bucket),
+      excludeCategories: [],
+    });
+    if (results.length > 0) {
+      return results.slice(0, topK);
+    }
+  }
+
+  // Step 5: no time bucket at all — give the orchestrator something to work
+  // with. The route's filterOverlappingStops audit will still drop unsafe
+  // slots; this just makes sure rag.ts never returns [] when the corpus has
+  // venues.
+  results = await fetchAndScore(inputs, {
+    buckets: undefined,
+    excludeCategories: [],
+  });
+  return results.slice(0, topK);
+}
+
+// ---- Internal pipeline ----
+
+interface FetchOptions {
+  buckets?: TimeOfDayBucket[]; // undefined = no time-of-day filter
+  excludeCategories: string[];
+}
+
+async function fetchAndScore(
+  inputs: RagInputs,
+  opts: FetchOptions
+): Promise<RagResult[]> {
   const supabase = createAdminClient();
 
   // ---- Phase 1: hard filters in SQL ----
-  // We never use .limit() here. We want every venue that survives the hard
-  // filters to be visible to the scoring phase. With ~80 rows this is cheap;
-  // if the corpus grows we'd push more of the scoring into Postgres.
   let query = supabase.from("venues").select("*");
 
   if (inputs.allowedCategories && inputs.allowedCategories.length > 0) {
     query = query.in("category", inputs.allowedCategories);
   }
+  if (opts.excludeCategories.length > 0) {
+    // Exclude categories already used today (day-wide diversity).
+    // Postgres: NOT IN list.
+    for (const cat of opts.excludeCategories) {
+      query = query.neq("category", cat);
+    }
+  }
   if (inputs.allowedNeighborhoods && inputs.allowedNeighborhoods.length > 0) {
     query = query.in("neighborhood", inputs.allowedNeighborhoods);
   }
 
-  // Dietary filter is the trickiest hard filter. A vegan user must NOT see a
-  // venue tagged only "no_restrictions" — that's a meat-friendly place. So:
-  //   - If the user has any strict diet (vegan / vegetarian / jain / halal /
-  //     gluten_free), the venue must include that tag OR be "vegetarian" when
-  //     the user is vegan? No — we only accept exact tag overlap. The vegan
-  //     user wants real vegan options, not "we have a paneer dish."
-  //   - Postgres array overlap operator: dietary_tags && ARRAY[...]
-  //   - If user has no dietary restriction (or only "no_restrictions"), skip.
-  // If the user explicitly chose "no restrictions", do not hard-filter venues.
+  // Time-of-day filter — overlap on the time_of_day_fit array.
+  if (opts.buckets && opts.buckets.length > 0) {
+    query = query.overlaps("time_of_day_fit", opts.buckets);
+  }
+
+  // Dietary filter. A vegan user must NOT see a venue tagged only
+  // "no_restrictions" — that's a meat-friendly place. We only accept exact
+  // tag overlap. The vegan user wants real vegan options.
   const strictDiet = inputs.dietaryTags.includes("no_restrictions")
     ? []
     : normalizeDietaryTags(inputs.dietaryTags).filter(
         (t) => t !== "no_restrictions"
       );
   if (strictDiet.length > 0) {
-    // .overlaps() generates the && operator on text[] columns.
     query = query.overlaps("dietary_tags", strictDiet);
   }
 
@@ -107,9 +196,10 @@ export async function retrieveVenues(inputs: RagInputs): Promise<RagResult[]> {
 
   const scored: RagResult[] = candidates.map((v) => {
     const interestScore = jaccardLike(inputs.interestTags, v.interest_tags);
-    const vibeScore = inputs.moodVibes && inputs.moodVibes.length > 0
-      ? jaccardLike(inputs.moodVibes, v.vibe_tags)
-      : 0;
+    const vibeScore =
+      inputs.moodVibes && inputs.moodVibes.length > 0
+        ? jaccardLike(inputs.moodVibes, v.vibe_tags)
+        : 0;
 
     const distanceKm = haversineKm(biasLat, biasLng, Number(v.lat), Number(v.lng));
     const distanceScore = Math.max(0, 1 - distanceKm / MAX_DISTANCE_KM);
@@ -122,7 +212,6 @@ export async function retrieveVenues(inputs: RagInputs): Promise<RagResult[]> {
         )
       : true;
 
-    // Weighted sum, then multiplied by openNow (0 or 1).
     const base =
       WEIGHTS.interest * interestScore +
       WEIGHTS.vibe * vibeScore +
@@ -134,7 +223,7 @@ export async function retrieveVenues(inputs: RagInputs): Promise<RagResult[]> {
       venue: toVenueDTO(v),
       score,
       breakdown: {
-        dietary: true, // already passed hard filter
+        dietary: true,
         interest: interestScore,
         vibe: vibeScore,
         distance: distanceScore,
@@ -143,25 +232,77 @@ export async function retrieveVenues(inputs: RagInputs): Promise<RagResult[]> {
     };
   });
 
-  // ---- Sort + tie-break ----
-  // Primary: score descending.
-  // Tie-break by venue id ascending so output is fully deterministic for demo.
+  // Sort by score desc, tiebreak by venue id for determinism.
   scored.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
     return a.venue.id < b.venue.id ? -1 : 1;
   });
 
-  // Drop zero-scored (closed-during-window) results so the LLM doesn't see them.
-  return scored.filter((r) => r.score > 0).slice(0, topK);
+  // Drop zero-scored (closed during window) so the LLM never sees them.
+  return scored.filter((r) => r.score > 0);
 }
 
-// ---- Helpers (kept inline so the whole retrieval story reads top to bottom) ----
+/**
+ * Interest coverage pass — ensures the returned set spans the user's stated
+ * interests when possible. Design doc section 6.
+ *
+ * Bucket scored results by which user interest they best match (highest tag
+ * overlap with that interest). Take 1 from each interest bucket first, in
+ * score order. Then fill remaining slots by raw score.
+ *
+ * Effect: a user who picked cafe + art + walks sees one of each at the top,
+ * not eight cafes.
+ */
+function applyInterestCoverage(
+  scored: RagResult[],
+  userInterests: string[],
+  topK: number
+): RagResult[] {
+  if (userInterests.length === 0 || scored.length <= topK) {
+    return scored.slice(0, topK);
+  }
+
+  // Map: interest -> list of results that match it (sorted by score desc).
+  const byInterest = new Map<string, RagResult[]>();
+  for (const interest of userInterests) {
+    const matches = scored.filter((r) => r.venue.interestTags.includes(interest));
+    if (matches.length > 0) byInterest.set(interest, matches);
+  }
+
+  const picked = new Set<string>();
+  const result: RagResult[] = [];
+
+  // First pass: take 1 from each interest bucket.
+  const bucketLists = Array.from(byInterest.values());
+  for (const matches of bucketLists) {
+    for (const r of matches) {
+      if (!picked.has(r.venue.id)) {
+        picked.add(r.venue.id);
+        result.push(r);
+        break;
+      }
+    }
+    if (result.length >= topK) return result;
+  }
+
+  // Second pass: fill remaining slots by raw score order.
+  for (const r of scored) {
+    if (result.length >= topK) break;
+    if (!picked.has(r.venue.id)) {
+      picked.add(r.venue.id);
+      result.push(r);
+    }
+  }
+
+  return result;
+}
+
+// ---- Helpers ----
 
 /**
  * Score the overlap between a user's set and a venue's set. Range [0, 1].
  * Not strict Jaccard (|A∩B|/|A∪B|) — we use |A∩B|/|A| so a venue that fully
  * matches the user's interests scores 1.0 even if it has extra tags.
- * This rewards venues that "cover" what the user wants.
  */
 function jaccardLike(userTags: string[], venueTags: string[]): number {
   if (userTags.length === 0) return 0;
@@ -171,9 +312,6 @@ function jaccardLike(userTags: string[], venueTags: string[]): number {
   return hits / userTags.length;
 }
 
-/**
- * Haversine distance in kilometres. Standard formula, no external library.
- */
 function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const toRad = (d: number) => (d * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
@@ -204,8 +342,8 @@ function getISTMinutesSinceMidnight(d: Date): number {
 }
 
 /**
- * Whether a venue is open at the start of a plan window with enough time for one stop.
- * Uses IST — server timezone must not affect Bangalore planning.
+ * Whether a venue is open at the start of a plan window with enough time for
+ * one stop. Uses IST — server timezone must not affect Bangalore planning.
  */
 function isOpenForPlanWindow(
   openingHours: string | null,
