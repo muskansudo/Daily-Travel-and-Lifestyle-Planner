@@ -53,6 +53,7 @@ export interface PlanContext {
   freeWindow: { start: Date; end: Date };
   vibes: string[];
   neighborhood?: string;
+  collaborative?: { friendDisplayName: string };
 }
 
 const EMPTY_PLAN: Plan = {
@@ -99,7 +100,13 @@ export async function generatePlan(
   if (!apiKey) return EMPTY_PLAN;
 
   const timeOfDay = deriveTimeOfDay(context.freeWindow.start);
-  const userPrompt = buildUserPrompt(candidates, context.vibes, timeOfDay, slots);
+  const userPrompt = buildUserPrompt(
+    candidates,
+    context.vibes,
+    timeOfDay,
+    slots,
+    context.collaborative
+  );
 
   let response: Response;
   try {
@@ -198,7 +205,8 @@ function buildUserPrompt(
   candidates: RagResult[],
   vibes: string[],
   timeOfDay: string,
-  slots: TimeSlot[]
+  slots: TimeSlot[],
+  collaborative?: { friendDisplayName: string }
 ): string {
   const venueCards = candidates
     .map(
@@ -207,7 +215,11 @@ function buildUserPrompt(
     )
     .join("\n");
 
-  return `Time of day: ${timeOfDay}
+  const collabLine = collaborative
+    ? `This is a joint outing plan for two people (you and ${collaborative.friendDisplayName}). Pick venues that work for both.\n`
+    : "";
+
+  return `${collabLine}Time of day: ${timeOfDay}
 Mood vibes: ${vibes.length ? vibes.join(", ") : "open"}
 Stops needed: ${slots.length}
 Time slots (IST): ${slots.map((s, i) => `${i + 1}. ${s.startTime}-${s.endTime}`).join(" | ")}

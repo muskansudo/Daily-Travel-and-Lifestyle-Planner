@@ -133,6 +133,46 @@ export function findFreeWindows(
   );
 }
 
+/**
+ * Free windows inside a fixed IST range (e.g. full calendar day for friend overlap).
+ */
+export function findFreeWindowsInRange(
+  events: CalendarEvent[],
+  rangeStart: Date,
+  rangeEnd: Date,
+  minDurationMinutes = 30
+): { start: Date; end: Date }[] {
+  const busy = events
+    .filter((e) => !e.allDay)
+    .map((e) => ({ start: e.start, end: e.end }))
+    .sort((a, b) => a.start.getTime() - b.start.getTime());
+
+  const windows: { start: Date; end: Date }[] = [];
+  let cursor = rangeStart;
+
+  for (const block of busy) {
+    if (block.end <= rangeStart || block.start >= rangeEnd) continue;
+
+    const blockStart = new Date(
+      Math.max(block.start.getTime(), rangeStart.getTime())
+    );
+    const blockEnd = new Date(Math.min(block.end.getTime(), rangeEnd.getTime()));
+
+    if (blockStart > cursor) {
+      windows.push({ start: cursor, end: blockStart });
+    }
+    if (blockEnd > cursor) cursor = blockEnd;
+  }
+
+  if (cursor < rangeEnd) {
+    windows.push({ start: cursor, end: rangeEnd });
+  }
+
+  return windows.filter(
+    (w) => (w.end.getTime() - w.start.getTime()) / 60000 >= minDurationMinutes
+  );
+}
+
 /** Split long gaps into plan-sized chunks so opening-hours checks stay realistic. */
 export function splitPlanWindows(
   windows: { start: Date; end: Date }[],

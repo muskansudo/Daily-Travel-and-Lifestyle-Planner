@@ -63,29 +63,61 @@ export function manualWindowToDates(
   return { start, end };
 }
 
+/**
+ * Overnight manual blocks (e.g. sleep 23:00–07:00) become two segments:
+ * last night → wake this morning, and tonight → wake tomorrow.
+ */
+function manualEntryToCalendarEvents(
+  entry: ManualEventInput
+): CalendarEvent[] {
+  const window = resolveManualWindow(entry);
+  if (!window || !entry.activity.trim()) return [];
+
+  const title = entry.activity.trim();
+  const location = entry.explanation?.trim() || null;
+  const start = istTodayAtHHMM(window.startTime);
+  const end = istTodayAtHHMM(window.endTime);
+
+  if (end.getTime() > start.getTime()) {
+    return [
+      {
+        id: `manual-${entry.id}`,
+        title,
+        start,
+        end,
+        location,
+        allDay: false,
+      },
+    ];
+  }
+
+  const startYesterday = new Date(start.getTime() - 24 * 60 * 60 * 1000);
+  const endTomorrow = new Date(end.getTime() + 24 * 60 * 60 * 1000);
+
+  return [
+    {
+      id: `manual-${entry.id}-lastnight`,
+      title,
+      start: startYesterday,
+      end,
+      location,
+      allDay: false,
+    },
+    {
+      id: `manual-${entry.id}-tonight`,
+      title,
+      start,
+      end: endTomorrow,
+      location,
+      allDay: false,
+    },
+  ];
+}
+
 export function manualEntriesToEvents(
   entries: ManualEventInput[]
 ): CalendarEvent[] {
-  return entries
-    .map((entry) => {
-      const window = resolveManualWindow(entry);
-      if (!window || !entry.activity.trim()) return null;
-
-      const { start, end } = manualWindowToDates(
-        window.startTime,
-        window.endTime
-      );
-
-      return {
-        id: `manual-${entry.id}`,
-        title: entry.activity.trim(),
-        start,
-        end,
-        location: entry.explanation?.trim() || null,
-        allDay: false,
-      };
-    })
-    .filter((event): event is CalendarEvent => event !== null);
+  return entries.flatMap((entry) => manualEntryToCalendarEvents(entry));
 }
 
 export function mergeScheduleEvents(

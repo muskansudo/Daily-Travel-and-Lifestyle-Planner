@@ -87,7 +87,7 @@ function categoryIcon(category: string): string {
   return CATEGORY_ICONS[category] ?? "place";
 }
 
-function istSortKeyFromHHMM(time: string): number {
+export function istSortKeyFromHHMM(time: string): number {
   return istTodayAtHHMM(time).getTime();
 }
 

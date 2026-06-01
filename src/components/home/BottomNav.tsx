@@ -12,7 +12,7 @@ const NAV_ITEMS: {
   href: string;
 }[] = [
   { id: "today", label: "Today", icon: "home_app_logo", href: "/home" },
-  { id: "friends", label: "Friends", icon: "group", href: "#" },
+  { id: "friends", label: "Friends", icon: "group", href: "/friends" },
   { id: "profile", label: "Profile", icon: "person", href: "#" },
 ];
 
