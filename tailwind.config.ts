@@ -54,6 +54,11 @@ const config: Config = {
       animation: {
         "soft-rise": "soft-rise 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards",
         aurora: "aurora 32s ease-in-out infinite",
+        "collab-orbit": "collab-orbit 12s linear infinite",
+        "collab-orbit-delayed": "collab-orbit-delayed 12s linear infinite",
+        "collab-pulse-glow": "collab-pulse-glow 4s ease-in-out infinite",
+        "collab-sparkle": "collab-sparkle 3s ease-in-out infinite",
+        "collab-shimmer": "collab-shimmer 2s ease-in-out infinite",
         "sheet-ascend": "sheet-ascend 0.32s cubic-bezier(0.22, 1, 0.36, 1)",
         "lavender-shimmer": "lavender-shimmer 3s linear infinite",
         "aurora-drift": "aurora-drift 20s ease infinite",
@@ -67,6 +72,37 @@ const config: Config = {
         aurora: {
           "0%, 100%": { backgroundPosition: "0% 50%" },
           "50%": { backgroundPosition: "100% 50%" },
+        },
+        "collab-orbit": {
+          from: {
+            transform: "rotate(0deg) translateX(68px) rotate(0deg)",
+          },
+          to: {
+            transform: "rotate(360deg) translateX(68px) rotate(-360deg)",
+          },
+        },
+        "collab-orbit-delayed": {
+          from: {
+            transform: "rotate(180deg) translateX(68px) rotate(-180deg)",
+          },
+          to: {
+            transform: "rotate(540deg) translateX(68px) rotate(-540deg)",
+          },
+        },
+        "collab-pulse-glow": {
+          "0%, 100%": {
+            opacity: "0.5",
+            transform: "scale(1)",
+          },
+          "50%": { opacity: "0.85", transform: "scale(1.08)" },
+        },
+        "collab-sparkle": {
+          "0%, 100%": { opacity: "1", transform: "scale(1) rotate(0deg)" },
+          "50%": { opacity: "0.75", transform: "scale(1.08) rotate(12deg)" },
+        },
+        "collab-shimmer": {
+          "0%": { transform: "translateX(-120%)" },
+          "100%": { transform: "translateX(380%)" },
         },
         "sheet-ascend": {
           "0%": { transform: "translateY(100%)" },

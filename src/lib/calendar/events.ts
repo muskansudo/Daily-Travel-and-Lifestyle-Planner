@@ -56,9 +56,6 @@ export async function getUpcomingEvents(
       : undefined,
   });
 
-  // If the access token is expired, googleapis will auto-refresh using the
-  // refresh token. We need to persist the new token back so future calls
-  // don't keep refreshing.
   oauth2.on("tokens", (tokens) => {
     void persistRefreshedTokens(user.id, tokens);
   });
@@ -81,7 +78,6 @@ export async function getUpcomingEvents(
     const items = res.data.items ?? [];
     return items
       .map((e): CalendarEvent | null => {
-        // All-day events have `date`; timed events have `dateTime`.
         const startStr = e.start?.dateTime ?? e.start?.date;
         const endStr = e.end?.dateTime ?? e.end?.date;
         if (!startStr || !endStr) return null;
@@ -96,37 +92,15 @@ export async function getUpcomingEvents(
       })
       .filter((x): x is CalendarEvent => x !== null);
   } catch {
-    // Auth expired beyond what refresh can fix, network blip, etc.
-    // Fall back to "no calendar data" — the plan generator handles that.
     return [];
   }
 }
-
-// ---- Busy / free interval helpers ----
-//
-// The whole planner agrees on busy intervals through this module. The
-// orchestrator builds them once, the slot allocator hard-guards against them,
-// and the post-LLM sanitisation re-checks them. Three layers of defence so an
-// AI venue stop NEVER overlaps office / gym / sleep.
 
 export interface BusyInterval {
   start: Date;
   end: Date;
 }
 
-/**
- * Build a sorted list of busy intervals from the user's events.
- *
- * Skips all-day events. Critically, for any timed event whose start and end
- * fall on different IST calendar days (the classic overnight sleep block,
- * e.g. 22:00 → 07:00 next day), we ALSO emit a mirror copy shifted one day
- * earlier so a regenerate at 06:30 today correctly sees the user as asleep.
- * Without the mirror, "today 22:00 → tomorrow 07:00" is the only block the
- * system knows about, and the early morning hours look free.
- *
- * The IST-day-crossing heuristic catches sleep blocks of any length while
- * leaving same-day blocks like office and gym alone.
- */
 export function buildBusyIntervals(events: CalendarEvent[]): BusyInterval[] {
   const DAY_MS = 24 * 60 * 60 * 1000;
   const intervals: BusyInterval[] = [];
@@ -156,10 +130,6 @@ function spansMidnightIST(start: Date, end: Date): boolean {
   return fmt(start) !== fmt(end);
 }
 
-/**
- * Half-open overlap check: does [start, end) intersect any busy interval?
- * A stop ending exactly when a busy block begins is OK (no overlap).
- */
 export function overlapsAnyBusy(
   start: Date,
   end: Date,
@@ -173,13 +143,6 @@ export function overlapsAnyBusy(
   return false;
 }
 
-/**
- * Compute free windows between scheduled events within the next `hoursAhead`.
- *
- * Uses buildBusyIntervals so the overnight mirror is honoured — without it, an
- * early-morning regenerate sees the pre-dawn hours as free even though the
- * user is still in bed.
- */
 export function findFreeWindows(
   events: CalendarEvent[],
   hoursAhead = 16,
@@ -187,8 +150,6 @@ export function findFreeWindows(
 ): { start: Date; end: Date }[] {
   const now = new Date();
   const horizon = new Date(now.getTime() + hoursAhead * 3600 * 1000);
-
-  // Single source of truth for "busy" — includes overnight mirrors.
   const busy = buildBusyIntervals(events);
 
   const windows: { start: Date; end: Date }[] = [];
@@ -202,20 +163,47 @@ export function findFreeWindows(
   }
   if (cursor < horizon) windows.push({ start: cursor, end: horizon });
 
-  // Drop windows shorter than minDurationMinutes — not useful for a venue stop.
   return windows.filter(
     (w) => (w.end.getTime() - w.start.getTime()) / 60000 >= minDurationMinutes
   );
 }
 
-/**
- * Rank free windows by duration (longest first), keep the top `max`, then
- * re-sort chronologically so the day still reads in order.
- *
- * Why: with a tiny 8:30–9:00 gap before office and a fat 18:00–22:00 evening,
- * earliest-first wastes the AI budget on a window that can't host a real plan.
- * Larger windows host more meaningful, less-cramped recommendations.
- */
+/** Free windows inside a fixed IST range (friends overlap / full day). */
+export function findFreeWindowsInRange(
+  events: CalendarEvent[],
+  rangeStart: Date,
+  rangeEnd: Date,
+  minDurationMinutes = 30
+): { start: Date; end: Date }[] {
+  const busy = buildBusyIntervals(events);
+
+  const windows: { start: Date; end: Date }[] = [];
+  let cursor = rangeStart;
+
+  for (const block of busy) {
+    if (block.end <= rangeStart || block.start >= rangeEnd) continue;
+
+    const blockStart = new Date(
+      Math.max(block.start.getTime(), rangeStart.getTime())
+    );
+    const blockEnd = new Date(Math.min(block.end.getTime(), rangeEnd.getTime()));
+
+    if (blockStart > cursor) {
+      windows.push({ start: cursor, end: blockStart });
+    }
+    if (blockEnd > cursor) cursor = blockEnd;
+  }
+
+  if (cursor < rangeEnd) {
+    windows.push({ start: cursor, end: rangeEnd });
+  }
+
+  return windows.filter(
+    (w) => (w.end.getTime() - w.start.getTime()) / 60000 >= minDurationMinutes
+  );
+}
+
+/** Home orchestrator: pick longest windows first. */
 export function pickPrioritizedWindows(
   windows: { start: Date; end: Date }[],
   max: number
@@ -233,14 +221,34 @@ export function pickPrioritizedWindows(
     .sort((a, b) => a.start.getTime() - b.start.getTime());
 }
 
-/**
- * Resolve an HH:MM string into a Date anchored to the IST calendar day of
- * `anchor`. Used by the orchestrator's final overlap audit, which has the plan
- * stops as HH:MM strings and needs Dates to compare against busy intervals.
- *
- * If hh:mm is before the anchor's hh:mm (i.e. the stop crosses midnight),
- * the Date is rolled forward one day so the chronology stays sane.
- */
+/** Friends collab: split long gaps into plan-sized chunks. */
+export function splitPlanWindows(
+  windows: { start: Date; end: Date }[],
+  maxMinutes = 180,
+  minDurationMinutes = 45
+): { start: Date; end: Date }[] {
+  const chunks: { start: Date; end: Date }[] = [];
+
+  for (const window of windows) {
+    let cursor = window.start;
+
+    while (cursor < window.end) {
+      const chunkEnd = new Date(
+        Math.min(cursor.getTime() + maxMinutes * 60_000, window.end.getTime())
+      );
+      const durationMin = (chunkEnd.getTime() - cursor.getTime()) / 60_000;
+
+      if (durationMin >= minDurationMinutes) {
+        chunks.push({ start: cursor, end: chunkEnd });
+      }
+
+      cursor = chunkEnd;
+    }
+  }
+
+  return chunks;
+}
+
 export function hhmmToDateInWindow(hhmm: string, anchor: Date): Date {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata",
@@ -266,7 +274,6 @@ export function hhmmToDateInWindow(hhmm: string, anchor: Date): Date {
     `${year}-${month}-${day}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00+05:30`
   );
 
-  // Roll past midnight if the time-of-day is earlier than the anchor's.
   if (hour * 60 + minute < anchorHour * 60 + anchorMinute) {
     return new Date(base.getTime() + 24 * 60 * 60 * 1000);
   }
@@ -290,6 +297,6 @@ async function persistRefreshedTokens(
       })
       .eq("id", userId);
   } catch {
-    // Non-fatal — old token will keep working until next refresh.
+    // Non-fatal
   }
 }

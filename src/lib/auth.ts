@@ -1,7 +1,16 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
+import { parseManualSchedule } from "@/lib/calendar/schedule";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { SaanjhUser } from "@/lib/types/user";
 import type { OnboardingStatus } from "@/lib/types/user";
+
+function normalizeUser(row: Record<string, unknown>): SaanjhUser {
+  const user = row as unknown as SaanjhUser;
+  return {
+    ...user,
+    manual_schedule: parseManualSchedule(row.manual_schedule ?? []),
+  };
+}
 
 export async function requireAuth(): Promise<string | null> {
   const { userId } = await auth();
@@ -18,7 +27,7 @@ export async function getOrCreateDbUser(clerkId: string): Promise<SaanjhUser> {
     .maybeSingle();
 
   if (existing) {
-    return existing as SaanjhUser;
+    return normalizeUser(existing);
   }
 
   const clerkUser = await currentUser();
@@ -42,7 +51,7 @@ export async function getOrCreateDbUser(clerkId: string): Promise<SaanjhUser> {
     throw new Error(`Failed to create user: ${error.message}`);
   }
 
-  return created as SaanjhUser;
+  return normalizeUser(created);
 }
 
 export async function getDbUserById(userId: string): Promise<SaanjhUser | null> {
@@ -53,7 +62,7 @@ export async function getDbUserById(userId: string): Promise<SaanjhUser | null> 
     .eq("id", userId)
     .maybeSingle();
 
-  return data as SaanjhUser | null;
+  return data ? normalizeUser(data) : null;
 }
 
 export function getOnboardingStatus(user: SaanjhUser): OnboardingStatus {

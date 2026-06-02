@@ -1,3 +1,5 @@
+import type { ManualScheduleEntry } from "@/lib/types/home";
+
 export interface SaanjhUser {
   id: string;
   clerk_id: string;
@@ -8,7 +10,6 @@ export interface SaanjhUser {
   dietary_tags: string[];
   lifestyle_tags: string[];
   interest_tags: string[];
-  activity_tags: string[];
   onboarding_profile_complete: boolean;
   onboarding_preferences_complete: boolean;
   onboarding_calendar_complete: boolean;
@@ -19,6 +20,7 @@ export interface SaanjhUser {
   google_token_expiry: string | null;
   google_email: string | null;
   calendar_connected: boolean;
+  manual_schedule: ManualScheduleEntry[];
   created_at: string;
   updated_at: string;
 }

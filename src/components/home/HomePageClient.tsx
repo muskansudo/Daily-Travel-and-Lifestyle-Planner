@@ -114,6 +114,15 @@ export function HomePageClient({
     void fetch("/api/onboarding/preferences")
       .then((res) => (res.ok ? res.json() : null))
       .catch(() => null);
+
+    void fetch("/api/schedule/manual")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.entries && Array.isArray(data.entries)) {
+          setManualEntries(data.entries);
+        }
+      })
+      .catch(() => null);
   }, []);
 
   const handleImageChange = useCallback((url: string, file: File | null) => {
@@ -169,9 +178,22 @@ export function HomePageClient({
     setPageState("generated");
   }, [generateError]);
 
-  const handleManualSave = (entries: ManualScheduleEntry[]) => {
-    setManualEntries(entries);
-  };
+  const handleManualSave = useCallback((entries: ManualScheduleEntry[]) => {
+    const valid = entries.filter(
+      (entry) =>
+        entry.startTime &&
+        entry.endTime &&
+        entry.startTime !== entry.endTime &&
+        entry.activity.trim()
+    );
+    setManualEntries(valid);
+
+    void fetch("/api/schedule/manual", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entries: valid }),
+    }).catch(() => null);
+  }, []);
 
   const handleRegenerate = () => {
     setGeneratedPlan(null);

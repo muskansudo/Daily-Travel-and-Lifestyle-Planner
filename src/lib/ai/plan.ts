@@ -71,6 +71,13 @@ export interface Plan {
   aiGenerated: boolean;
 }
 
+export interface PlanContext {
+  freeWindow: { start: Date; end: Date };
+  vibes: string[];
+  neighborhood?: string;
+  collaborative?: { friendDisplayName: string };
+}
+
 export interface TimeSlot {
   startTime: string;
   endTime: string;
@@ -79,6 +86,12 @@ export interface TimeSlot {
   startDate: Date;
   endDate: Date;
 }
+
+const EMPTY_PLAN: Plan = {
+  stops: [],
+  summary: "",
+  aiGenerated: false,
+};
 
 /**
  * Carve a free window into 1-4 venue slots.
@@ -197,7 +210,8 @@ Use only a venueId from the provided list. Never invent.`;
 export async function generatePlanForSlot(
   candidates: RagResult[],
   slot: TimeSlot,
-  vibes: string[]
+  vibes: string[],
+  collaborative?: { friendDisplayName: string }
 ): Promise<PlanStop | null> {
   if (candidates.length === 0) return null;
 
@@ -205,7 +219,13 @@ export async function generatePlanForSlot(
   if (!apiKey) return null;
 
   const timeOfDay = bucketForHour(slot.startDate);
-  const userPrompt = buildSlotPrompt(candidates, vibes, timeOfDay, slot);
+  const userPrompt = buildSlotPrompt(
+    candidates,
+    vibes,
+    timeOfDay,
+    slot,
+    collaborative
+  );
 
   let response: Response;
   try {
@@ -256,7 +276,8 @@ function buildSlotPrompt(
   candidates: RagResult[],
   vibes: string[],
   timeOfDay: string,
-  slot: TimeSlot
+  slot: TimeSlot,
+  collaborative?: { friendDisplayName: string }
 ): string {
   const venueCards = candidates
     .map(
@@ -265,7 +286,11 @@ function buildSlotPrompt(
     )
     .join("\n");
 
-  return `Time of day: ${timeOfDay}
+  const collabLine = collaborative
+    ? `This is a joint outing plan for two people (you and ${collaborative.friendDisplayName}). Pick venues that work for both.\n`
+    : "";
+
+  return `${collabLine}Time of day: ${timeOfDay}
 Slot: ${slot.startTime}-${slot.endTime} IST
 Mood vibes: ${vibes.length ? vibes.join(", ") : "open"}
 
@@ -301,6 +326,37 @@ function sanitiseStop(
     endTime: slot.endTime,
     whyThis: finalWhyThis,
   };
+}
+
+/** One-window multi-stop plan for friends collab (no per-slot RAG). */
+export async function generatePlan(
+  candidates: RagResult[],
+  context: PlanContext
+): Promise<Plan> {
+  if (candidates.length === 0) return EMPTY_PLAN;
+
+  const slots = allocateSlots(context.freeWindow, [], 4);
+  if (slots.length === 0) return EMPTY_PLAN;
+
+  const usedVenueIds = new Set<string>();
+  const stops: PlanStop[] = [];
+
+  for (const slot of slots) {
+    const pool = candidates.filter((c) => !usedVenueIds.has(c.venue.id));
+    const stop = await generatePlanForSlot(
+      pool,
+      slot,
+      context.vibes,
+      context.collaborative
+    );
+    if (!stop) continue;
+    stops.push(stop);
+    usedVenueIds.add(stop.venueId);
+  }
+
+  if (stops.length === 0) return EMPTY_PLAN;
+
+  return { stops, summary: "", aiGenerated: true };
 }
 
 // ---- Formatting helpers ----
