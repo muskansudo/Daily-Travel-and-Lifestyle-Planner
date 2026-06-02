@@ -8,20 +8,23 @@ import type {
   GeneratePlanFilters,
   HomePageState,
   ManualScheduleEntry,
-  VibeId,
   WeatherInfo,
 } from "@/lib/types/home";
 import { DEFAULT_VIBE_IMAGE } from "@/lib/constants/vibes";
 import { MOCK_WEATHER } from "@/lib/mock/homePlan";
 import {
   buildGeneratedPlanFromResponse,
-  buildManualTimeline,
   countEmptyWindows,
   isNoCalendarConnected,
   isPackedDay,
   requestPlanGeneration,
   type PlanGenerateResponse,
 } from "@/lib/home/generatePlan";
+import {
+  clearDailyPlan,
+  loadDailyPlan,
+  saveDailyPlan,
+} from "@/lib/home/dailyPlanStorage";
 import { AuroraBackground } from "@/components/ui/AuroraBackground";
 import { HomeHeader } from "./HomeHeader";
 import { VibeSelector } from "@/components/home/VibeSelector";
@@ -94,7 +97,6 @@ export function HomePageClient({
   const [pageState, setPageState] = useState<HomePageState>("initial");
   const [vibeImageUrl, setVibeImageUrl] = useState(DEFAULT_VIBE_IMAGE);
   const [vibeImageFile, setVibeImageFile] = useState<File | null>(null);
-  const [selectedVibes, setSelectedVibes] = useState<VibeId[]>([]);
   const [manualSheetOpen, setManualSheetOpen] = useState(false);
   const [manualEntries, setManualEntries] = useState<ManualScheduleEntry[]>(
     []
@@ -111,6 +113,13 @@ export function HomePageClient({
   const planResponseRef = useRef<PlanGenerateResponse | null>(null);
 
   useEffect(() => {
+    const stored = loadDailyPlan();
+    if (stored) {
+      const plan = buildGeneratedPlanFromResponse(stored);
+      setGeneratedPlan(plan);
+      planResponseRef.current = stored;
+    }
+
     void fetch("/api/onboarding/preferences")
       .then((res) => (res.ok ? res.json() : null))
       .catch(() => null);
@@ -138,7 +147,6 @@ export function HomePageClient({
 
     try {
       const response = await requestPlanGeneration({
-        selectedVibes,
         vibeImageFile,
         manualEntries,
         allowedNeighborhoods: generateFilters.allowedNeighborhoods,
@@ -147,10 +155,6 @@ export function HomePageClient({
       });
 
       planResponseRef.current = response;
-
-      if (response.mood?.aiExtracted && response.mood.vibes.length > 0) {
-        setSelectedVibes(response.mood.vibes.slice(0, 3) as VibeId[]);
-      }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Plan generation failed";
@@ -163,7 +167,6 @@ export function HomePageClient({
     generateFilters.allowedNeighborhoods,
     generateFilters.hoursAhead,
     manualEntries,
-    selectedVibes,
     vibeImageFile,
   ]);
 
@@ -175,8 +178,14 @@ export function HomePageClient({
 
     const plan = buildGeneratedPlanFromResponse(planResponseRef.current);
     setGeneratedPlan(plan);
+    saveDailyPlan(planResponseRef.current);
     setPageState("generated");
   }, [generateError]);
+
+  const handleViewDay = useCallback(() => {
+    if (!generatedPlan) return;
+    setPageState("generated");
+  }, [generatedPlan]);
 
   const handleManualSave = useCallback((entries: ManualScheduleEntry[]) => {
     const valid = entries.filter(
@@ -198,11 +207,12 @@ export function HomePageClient({
   const handleRegenerate = () => {
     setGeneratedPlan(null);
     planResponseRef.current = null;
+    clearDailyPlan();
     setPageState("initial");
   };
 
   return (
-    <AuroraBackground>
+    <AuroraBackground variant="sanctuary">
       <HomeHeader
         userName={userName}
         weather={weather}
@@ -232,21 +242,15 @@ export function HomePageClient({
                 <VibeSelector
                   vibeImageUrl={vibeImageUrl}
                   vibeImageFile={vibeImageFile}
-                  selectedVibes={selectedVibes}
                   onImageChange={handleImageChange}
-                  onVibesChange={setSelectedVibes}
                 />
                 <GeneratePlanCard
                   onGenerate={() => void handleGenerate()}
                   onManualSchedule={() => setManualSheetOpen(true)}
+                  onViewDay={handleViewDay}
                   manualEntryCount={manualEntries.length}
+                  hasGeneratedPlan={generatedPlan !== null}
                 />
-                {manualEntries.length > 0 && (
-                  <PlanTimeline
-                    items={buildManualTimeline(manualEntries)}
-                    emptyMessage="Add times and activities to build your schedule."
-                  />
-                )}
               </motion.div>
             )}
 

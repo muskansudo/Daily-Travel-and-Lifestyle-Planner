@@ -1,8 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { GlassCard, SectionTitle, OverlineLabel } from "@/components/profile/GlassCard";
+import { AuroraBackground } from "@/components/ui/AuroraBackground";
+import { HomeHeader } from "@/components/home/HomeHeader";
+import { BottomNav } from "@/components/home/BottomNav";
+import { MOCK_WEATHER } from "@/lib/mock/homePlan";
 import { PillButton, PreferenceChip } from "@/components/profile/PillButton";
 import { BottomSheet, GlassInput, GlassSelect } from "@/components/profile/BottomSheet";
 import { cn } from "@/lib/utils/cn";
@@ -17,12 +20,6 @@ import type {
 // ─── ICON SET ─────────────────────────────────────────────────────────────────
 // Thin-stroke icons; on-surface color; 24px stroke
 const icons = {
-  Settings: () => (
-    <svg width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.6" viewBox="0 0 24 24">
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-    </svg>
-  ),
   Plus: () => (
     <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" viewBox="0 0 24 24">
       <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
@@ -375,46 +372,6 @@ function EditProfileSheet({
   );
 }
 
-// ─── BOTTOM NAVIGATION ────────────────────────────────────────────────────────
-function BottomNav({ active }: { active: "today" | "friends" | "profile" }) {
-  const router = useRouter();
-  const tabs = [
-    { id: "today" as const, label: "Today", icon: "🏠", href: "/home" },
-    { id: "friends" as const, label: "Friends", icon: "👥", href: "#" },
-    { id: "profile" as const, label: "Profile", icon: "✨", href: "/profile" },
-  ];
-
-  return (
-    <nav
-      className={cn(
-        "fixed bottom-0 left-1/2 -translate-x-1/2 z-40",
-        "w-full max-w-content",
-        "bg-white/70 backdrop-blur-xl",
-        "border-t border-white/60",
-      )}
-      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
-    >
-      <div className="flex justify-around items-center h-16 px-4">
-        {tabs.map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => router.push(tab.href)}
-            className={cn(
-              "flex flex-col items-center gap-1 min-w-[44px] min-h-[44px] justify-center",
-              "font-montserrat text-[10px] font-semibold tracking-wider uppercase",
-              "transition-colors duration-150",
-              active === tab.id ? "text-primary" : "text-outline"
-            )}
-          >
-            <span className="text-xl">{tab.icon}</span>
-            <span>{tab.label}</span>
-          </button>
-        ))}
-      </div>
-    </nav>
-  );
-}
-
 // ─── DEMO FALLBACK DATA ───────────────────────────────────────────────────────
 const DEMO_PROFILE: UserProfile = {
   id: "demo", clerk_user_id: "demo", display_name: "Riya Sharma",
@@ -604,70 +561,44 @@ export default function ProfilePage() {
     } catch { }
   }, [dietary]);
 
-  // ── Time-based greeting ────────────────────────────────────────────────────
-  const greeting = (() => {
-    const h = new Date().getHours();
-    if (h < 12) return "Good Morning";
-    if (h < 17) return "Good Afternoon";
-    return "Good Evening";
-  })();
+  const headerName = profile?.display_name ?? "there";
+  const headerPhoto = profile?.avatar_url ?? null;
 
   // ── Loading state ──────────────────────────────────────────────────────
   if (loading) {
     return (
-      <div className="aurora-bg min-h-svh flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4 animate-soft-rise">
-          <div className="w-16 h-16 rounded-full glass-ai flex items-center justify-center text-3xl">
-            ✨
+      <AuroraBackground variant="sanctuary">
+        <HomeHeader
+          userName="there"
+          weather={MOCK_WEATHER}
+          profileImageUrl={null}
+        />
+        <main className="mx-auto flex min-h-dvh max-w-[600px] items-center justify-center px-6 pb-40 pt-28">
+          <div className="flex flex-col items-center gap-4 animate-soft-rise">
+            <div className="flex h-16 w-16 items-center justify-center rounded-full glass-ai text-3xl">
+              ✨
+            </div>
+            <p className="font-playfair text-lg italic text-on-surface-variant">
+              Curating your sanctuary…
+            </p>
           </div>
-          <p className="font-playfair text-lg text-on-surface-variant italic">
-            Curating your sanctuary…
-          </p>
-        </div>
-      </div>
+        </main>
+        <BottomNav activeTab="profile" />
+      </AuroraBackground>
     );
   }
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
-    <div className="aurora-bg min-h-svh">
-      <div className="page-shell pt-0">
+    <AuroraBackground variant="sanctuary">
+      <HomeHeader
+        userName={headerName}
+        weather={MOCK_WEATHER}
+        profileImageUrl={headerPhoto}
+        onSettingsClick={() => setShowEditProfile(true)}
+      />
 
-        {/* ── TOP APP BAR ─────────────────────────────────────────── */}
-        <header className="flex items-center justify-between pt-safe-area pb-2 sticky top-0 z-30 bg-transparent">
-          <div className="flex items-center gap-3">
-            {/* Avatar */}
-            <button
-              onClick={() => setShowEditProfile(true)}
-              className={cn(
-                "w-11 h-11 rounded-full overflow-hidden",
-                "bg-gradient-to-br from-primary-container to-secondary-container",
-                "ring-2 ring-primary-container flex items-center justify-center",
-                "font-playfair text-lg font-semibold text-on-primary-container",
-                "transition-transform duration-150 active:scale-95"
-              )}
-              aria-label="Edit profile"
-            >
-              {profile?.avatar_url
-                ? <img src={profile.avatar_url} alt="Avatar" className="w-full h-full object-cover" />
-                : profile?.display_name?.[0] ?? "S"
-              }
-            </button>
-            <span className="font-montserrat text-[13px] text-on-surface-variant font-medium">
-              {greeting}
-            </span>
-          </div>
-
-          {/* Settings icon */}
-          <button
-            onClick={() => setShowEditProfile(true)}
-            className="w-11 h-11 rounded-full glass-card flex items-center justify-center text-on-surface-variant hover:text-on-surface transition-colors"
-            aria-label="Settings"
-          >
-            <icons.Settings />
-          </button>
-        </header>
-
+      <main className="mx-auto max-w-[600px] space-y-8 px-6 pb-40 pt-28">
         {/* ── HERO — SANCTUARY CARD ──────────────────────────────────── */}
         <section className="mt-2 animate-soft-rise">
           <GlassCard
@@ -872,10 +803,9 @@ export default function ProfilePage() {
           </GlassCard>
         </section>
 
-      </div>
+      </main>
 
-      {/* ── BOTTOM NAVIGATION ───────────────────────────────────────── */}
-      <BottomNav active="profile" />
+      <BottomNav activeTab="profile" />
 
       {/* ── SHEETS ────────────────────────────────────────────────────────── */}
       <AddWardrobeSheet
@@ -894,6 +824,6 @@ export default function ProfilePage() {
 
       {/* ── TOAST ─────────────────────────────────────────────────────── */}
       <Toast message={toast} />
-    </div>
+    </AuroraBackground>
   );
 }

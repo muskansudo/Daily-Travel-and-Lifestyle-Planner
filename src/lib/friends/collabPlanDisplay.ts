@@ -12,7 +12,7 @@ import type {
 } from "@/lib/types/friends";
 import type { TimelineItem, VenueRecommendation } from "@/lib/types/home";
 import { DEFAULT_BIAS_LATLNG } from "@/lib/constants/venues";
-import { DEFAULT_VIBE_IMAGE } from "@/lib/constants/vibes";
+import { getVenueCategoryImageUrl } from "@/lib/venues/categoryImages";
 import {
   inferCollabDisplayNames,
   mergeCollabBusyEvents,
@@ -191,7 +191,7 @@ export function collabStopsToVenues(
   return allStops.map((stop, index) => ({
     id: stop.venueId,
     name: stop.venueName,
-    imageUrl: DEFAULT_VIBE_IMAGE,
+    imageUrl: getVenueCategoryImageUrl(stop.category),
     distance: formatNeighborhood(stop.neighborhood),
     category: stop.category,
     whyThisVenue: stop.whyThis,

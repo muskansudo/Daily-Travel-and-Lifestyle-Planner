@@ -2,27 +2,17 @@
 
 import { useRef } from "react";
 import { motion } from "framer-motion";
-import { ChipSelect } from "@/components/ui/ChipSelect";
-import {
-  DEFAULT_VIBE_IMAGE,
-  MAX_VIBE_SELECTIONS,
-  VIBE_OPTIONS,
-} from "@/lib/constants/vibes";
-import type { VibeId } from "@/lib/types/home";
+import { DEFAULT_VIBE_IMAGE } from "@/lib/constants/vibes";
 import { fadeUp } from "./animations";
 
 export function VibeSelector({
   vibeImageUrl,
   vibeImageFile,
-  selectedVibes,
   onImageChange,
-  onVibesChange,
 }: {
   vibeImageUrl: string;
   vibeImageFile: File | null;
-  selectedVibes: VibeId[];
   onImageChange: (url: string, file: File | null) => void;
-  onVibesChange: (vibes: VibeId[]) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -38,13 +28,6 @@ export function VibeSelector({
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
-  };
-
-  const handleVibesChange = (ids: string[]) => {
-    if (ids.length > MAX_VIBE_SELECTIONS && ids.length > selectedVibes.length) {
-      return;
-    }
-    onVibesChange(ids as VibeId[]);
   };
 
   return (
@@ -109,20 +92,11 @@ export function VibeSelector({
             </h2>
           </div>
         </div>
-        <div className="space-y-5 p-4">
-          <p className="font-montserrat text-sm leading-snug text-on-surface-variant">
-            Upload a photo that captures today&apos;s mood — Saanjh uses it to
-            shape your schedule, outfit, and venues so your day feels
-            intentionally yours.
-          </p>
-          <ChipSelect
-            label="Today's vibes"
-            hint={`Pick up to ${MAX_VIBE_SELECTIONS} moods`}
-            options={VIBE_OPTIONS}
-            selected={selectedVibes}
-            onChange={handleVibesChange}
-          />
-        </div>
+        <p className="p-4 font-montserrat text-sm leading-snug text-on-surface-variant">
+          Upload a photo that captures today&apos;s mood — Saanjh uses it to
+          shape your schedule, outfit, and venues so your day feels
+          intentionally yours.
+        </p>
       </div>
     </motion.section>
   );

@@ -6,14 +6,19 @@ import { fadeUp } from "./animations";
 export function GeneratePlanCard({
   onGenerate,
   onManualSchedule,
+  onViewDay,
   disabled,
   manualEntryCount = 0,
+  hasGeneratedPlan = false,
 }: {
   onGenerate: () => void;
   onManualSchedule: () => void;
+  onViewDay?: () => void;
   disabled?: boolean;
   manualEntryCount?: number;
+  hasGeneratedPlan?: boolean;
 }) {
+  const showStatusRow = manualEntryCount > 0 || hasGeneratedPlan;
   return (
     <motion.section
       variants={fadeUp}
@@ -41,11 +46,25 @@ export function GeneratePlanCard({
             Saanjh reads your calendar, weather, wardrobe, and vibe to craft a
             seamless day plan.
           </p>
-          {manualEntryCount > 0 && (
-            <p className="mt-2 font-montserrat text-xs font-semibold text-primary">
-              {manualEntryCount} manual{" "}
-              {manualEntryCount === 1 ? "commitment" : "commitments"} saved
-            </p>
+          {showStatusRow && (
+            <div className="mt-2 flex items-center justify-between gap-3">
+              {manualEntryCount > 0 ? (
+                <p className="font-montserrat text-xs font-semibold text-primary">
+                  {manualEntryCount} manual{" "}
+                  {manualEntryCount === 1 ? "commitment" : "commitments"} saved
+                </p>
+              ) : (
+                <span aria-hidden />
+              )}
+              <button
+                type="button"
+                disabled={!hasGeneratedPlan}
+                onClick={onViewDay}
+                className="shrink-0 font-montserrat text-xs font-semibold uppercase tracking-wide transition-colors disabled:cursor-not-allowed disabled:text-on-surface-variant/35 enabled:text-primary enabled:hover:text-primary/80"
+              >
+                View your day
+              </button>
+            </div>
           )}
         </div>
 

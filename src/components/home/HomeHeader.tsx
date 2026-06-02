@@ -16,10 +16,12 @@ export function HomeHeader({
   userName,
   weather,
   profileImageUrl,
+  onSettingsClick,
 }: {
   userName: string;
   weather?: WeatherInfo | null;
   profileImageUrl?: string | null;
+  onSettingsClick?: () => void;
 }) {
   const now = new Date();
 
@@ -74,6 +76,7 @@ export function HomeHeader({
           whileHover={{ scale: 1.05 }}
           whileTap={{ scale: 0.92 }}
           type="button"
+          onClick={onSettingsClick}
           className="rounded-full p-2 transition-colors hover:bg-white/10"
           aria-label="Settings"
         >
