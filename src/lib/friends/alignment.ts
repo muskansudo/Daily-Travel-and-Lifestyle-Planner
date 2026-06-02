@@ -49,3 +49,47 @@ export function collabInterestTags(a: string[], b: string[]): string[] {
 export function collabDietaryTags(a: string[], b: string[]): string[] {
   return unionTags(a, b);
 }
+
+// ---- Friend-default category fallback ----
+//
+// When two friends have ZERO shared interests the interest-based retrieval
+// signal disappears. Rather than unioning both users' full interest sets
+// (which picks individual activities, not friend activities) we fall back to
+// categories that are inherently social: eating, drinking, and entertainment.
+//
+// Rationale for the list:
+//   - restaurant / bar / cafe: universal "meet and eat/drink" social formats.
+//   - entertainment: movies, bowling, escape rooms, arcades — exactly what
+//     friends default to when they have nothing specific in common.
+// Art and park are intentionally excluded from the hard fallback — they skew
+// solo in our corpus (galleries are quiet, park walks feel solo-leaning).
+//
+// When friends DO share interests, no category filter is applied — the shared
+// interests drive retrieval naturally (same as Home tab behaviour).
+
+export const FRIEND_DEFAULT_CATEGORIES = [
+  "entertainment",
+  "restaurant",
+  "bar",
+  "cafe",
+] as const;
+
+/**
+ * Returns the allowed category list for collab RAG retrieval.
+ *
+ * - If the two friends share ≥1 interest tag: returns undefined (no category
+ *   filter — shared interests drive retrieval, same as Home tab).
+ * - If they share ZERO interests: returns FRIEND_DEFAULT_CATEGORIES so
+ *   retrieval is hard-filtered to inherently social venues.
+ *
+ * Pass the return value directly as `allowedCategories` in the retrieveVenues
+ * call. Returning undefined means "no filter" in rag.ts — don't change that.
+ */
+export function collabAllowedCategories(
+  meInterests: string[],
+  friendInterests: string[]
+): string[] | undefined {
+  const shared = intersectTags(meInterests, friendInterests);
+  if (shared.length > 0) return undefined; // interests do the work
+  return [...FRIEND_DEFAULT_CATEGORIES];
+}

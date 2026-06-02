@@ -6,6 +6,10 @@ import {
   backdropVariants,
   sheetVariants,
 } from "./animations";
+import {
+  ShadedRoutePreview,
+  shouldUseShadedPreview,
+} from "./ShadedRoutePreview";
 
 const TRANSPORT_LABELS = {
   walking: { label: "Walking", icon: "directions_walk" },
@@ -114,7 +118,14 @@ export function VenueRouteSheet({
             </div>
 
             <div className="no-scrollbar max-h-[calc(90dvh-180px)] overflow-y-auto px-6 pb-[max(1rem,env(safe-area-inset-bottom))]">
-              <RouteMapPreview embedUrl={embedUrl} venueName={venue.name} />
+              {/* Byrasandra Lake gets the custom shade-aware preview (Round 2
+                  demo route — see ShadedRoutePreview.tsx for scope notes).
+                  All other venues fall back to the keyless Google Maps embed. */}
+              {shouldUseShadedPreview(venue.name) ? (
+                <ShadedRoutePreview venueName={venue.name} />
+              ) : (
+                <RouteMapPreview embedUrl={embedUrl} venueName={venue.name} />
+              )}
 
               {/* Mode is a real value (passed through to Google Maps). ETA,
                   distance, and turn-by-turn directions are deferred to Stage 3

@@ -12,6 +12,10 @@ export const VENUE_CATEGORIES = [
   { id: "wellness", label: "Wellness" },
   { id: "bookstore", label: "Bookstore" },
   { id: "bar", label: "Bar" },
+  // Added in migration 009: classic "friend activity" category — movies,
+  // bowling, escape rooms, gaming. Used as the friend-default fallback when
+  // two friends have zero shared interest overlap.
+  { id: "entertainment", label: "Entertainment" },
 ] as const;
 
 export const VENUE_NEIGHBORHOODS = [
