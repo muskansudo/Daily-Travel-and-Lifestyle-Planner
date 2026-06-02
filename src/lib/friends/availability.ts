@@ -1,6 +1,8 @@
 import { findFreeWindowsInRange } from "@/lib/calendar/events";
-import { getMergedScheduleEvents } from "@/lib/calendar/schedule";
-import { userHasScheduleSource } from "@/lib/calendar/schedule";
+import {
+  getCalendarOnlyEvents,
+  userHasCalendarSource,
+} from "@/lib/calendar/schedule";
 import { istTodayAtHHMM } from "@/lib/calendar/manualEvents";
 import { intersectTags } from "@/lib/friends/alignment";
 import { tagIdsToLabels } from "@/lib/friends/tagLabels";
@@ -273,9 +275,12 @@ type ScheduleUser = Pick<
 >;
 
 export async function fetchFreeWindows(user: SaanjhUser): Promise<TimeWindow[]> {
+  // Friends planning is calendar-only — see schedule.ts. A user without
+  // Google Calendar connected returns an empty event list, which surfaces
+  // upstream as an empty free-window list and the "calendar required" UI.
   const dayStart = startOfTodayIST();
   const dayEnd = endOfTodayIST();
-  const events = await getMergedScheduleEvents(user, HOURS_AHEAD);
+  const events = await getCalendarOnlyEvents(user, HOURS_AHEAD);
   return findFreeWindowsInRange(
     events,
     dayStart,
@@ -288,33 +293,35 @@ export async function detectAvailability(
   me: SaanjhUser,
   friend: ScheduleUser
 ): Promise<FriendAvailability> {
-  const friendHasSchedule = userHasScheduleSource(friend);
-  const meHasSchedule = userHasScheduleSource(me);
+  // Friends planning requires Google Calendar on BOTH sides — manual schedule
+  // is Home-only. Surface clear nudge states when either user is missing it.
+  const friendHasCalendar = userHasCalendarSource(friend);
+  const meHasCalendar = userHasCalendarSource(me);
 
-  if (!friendHasSchedule && !meHasSchedule) {
+  if (!friendHasCalendar && !meHasCalendar) {
     return {
       kind: "both_calendar_not_linked",
-      title: "No schedules shared",
+      title: "Calendars not connected",
       subtitle:
-        "Connect Google Calendar or add manual commitments on Home to find overlap.",
+        "Joint plans need Google Calendar connected on both sides. Send your friend a nudge to connect.",
     };
   }
 
-  if (!friendHasSchedule) {
+  if (!friendHasCalendar) {
     return {
       kind: "friend_calendar_not_linked",
-      title: "No schedule yet",
+      title: "Friend hasn't connected calendar",
       subtitle:
-        "Waiting for Google Calendar or manual schedule from your friend.",
+        "Waiting for your friend to connect Google Calendar so we can find overlap.",
     };
   }
 
-  if (!meHasSchedule) {
+  if (!meHasCalendar) {
     return {
       kind: "my_calendar_not_linked",
-      title: "Add your schedule",
+      title: "Connect your calendar",
       subtitle:
-        "Connect Google Calendar or add manual commitments on Home.",
+        "Joint plans need Google Calendar connected. Manual entries don't count here.",
     };
   }
 

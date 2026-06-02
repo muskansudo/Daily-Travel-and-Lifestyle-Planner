@@ -66,17 +66,32 @@ export function ManualScheduleSheet({
   };
 
   const removeEntry = (id: string) => {
-    setLocalEntries((prev) =>
-      prev.length <= 1 ? prev : prev.filter((e) => e.id !== id)
-    );
+    // Allow removing every entry — empty state means "switch back to Google
+    // Calendar only on Home". The user can also use "Clear all" below.
+    setLocalEntries((prev) => prev.filter((e) => e.id !== id));
+  };
+
+  const clearAll = () => {
+    setLocalEntries([]);
+    setSaveError(null);
   };
 
   const handleSave = () => {
-    const valid = localEntries.filter(isValidEntry);
+    // Empty save is allowed and means "I'm clearing manual schedule, fall back
+    // to Google Calendar on Home." Partial entries (some filled, some not)
+    // are still an error so we don't silently drop unsaved typing.
+    if (localEntries.length === 0) {
+      onSave([]);
+      onClose();
+      return;
+    }
 
-    if (valid.length === 0) {
+    const valid = localEntries.filter(isValidEntry);
+    const hasPartial = localEntries.length !== valid.length;
+
+    if (hasPartial) {
       setSaveError(
-        "Add at least one commitment with a start time, end time, and activity."
+        "Fill in start time, end time, and activity for every row, or remove the unfinished ones."
       );
       return;
     }
@@ -134,13 +149,23 @@ export function ManualScheduleSheet({
             </div>
 
             <div className="no-scrollbar max-h-[50dvh] overflow-y-auto px-6 pb-4">
-              <motion.div
-                variants={staggerContainer}
-                initial="hidden"
-                animate="visible"
-                className="space-y-4"
-              >
-                {localEntries.map((entry) => (
+              {localEntries.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-on-surface-variant/30 px-4 py-8 text-center">
+                  <p className="font-montserrat text-sm text-on-surface-variant">
+                    No manual entries.
+                  </p>
+                  <p className="mt-1 font-montserrat text-[11px] text-on-surface-variant/70">
+                    Saving now keeps your day on Google Calendar only. Add a window to switch back.
+                  </p>
+                </div>
+              ) : (
+                <motion.div
+                  variants={staggerContainer}
+                  initial="hidden"
+                  animate="visible"
+                  className="space-y-4"
+                >
+                  {localEntries.map((entry) => (
                   <motion.div
                     key={entry.id}
                     variants={staggerItem}
@@ -151,17 +176,16 @@ export function ManualScheduleSheet({
                       <span className="font-montserrat text-xs font-semibold uppercase tracking-wider text-primary">
                         Busy window
                       </span>
-                      {localEntries.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => removeEntry(entry.id)}
-                          className="text-on-surface-variant/60 hover:text-error"
-                        >
-                          <span className="material-symbols-outlined text-[18px]">
-                            delete
-                          </span>
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => removeEntry(entry.id)}
+                        className="text-on-surface-variant/60 hover:text-error"
+                        aria-label="Remove this window"
+                      >
+                        <span className="material-symbols-outlined text-[18px]">
+                          delete
+                        </span>
+                      </button>
                     </div>
                     <div className="space-y-3">
                       <div className="grid grid-cols-2 gap-3">
@@ -213,7 +237,8 @@ export function ManualScheduleSheet({
                     </div>
                   </motion.div>
                 ))}
-              </motion.div>
+                </motion.div>
+              )}
 
               <motion.button
                 type="button"
@@ -225,6 +250,16 @@ export function ManualScheduleSheet({
                 <span className="material-symbols-outlined text-[18px]">add</span>
                 Add another window
               </motion.button>
+
+              {localEntries.length > 0 && (
+                <button
+                  type="button"
+                  onClick={clearAll}
+                  className="mt-3 block w-full text-center font-montserrat text-[11px] text-on-surface-variant underline-offset-4 hover:text-error hover:underline"
+                >
+                  Clear all manual entries (use Google Calendar only)
+                </button>
+              )}
             </div>
 
             <div className="border-t border-white/20 px-6 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">

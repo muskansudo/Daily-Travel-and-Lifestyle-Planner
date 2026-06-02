@@ -1,41 +1,48 @@
-// Saanjh — Friends collab plan generator (rewritten, migration 009)
+// Friends — joint plan generation.
 //
-// Architecture rewrite: matches the Home tab per-slot pipeline (design doc v2,
-// sections 4, 9). The old implementation used splitPlanWindows + a single
-// generatePlan call per window (multi-stop, one retrieval call for all stops).
-// That caused five bugs:
+// Architecture (matching Home v2):
 //
-//   Bug 1: Used the OLD splitPlanWindows flow (chunked 180-min pieces) instead
-//          of allocateSlots.
-//   Bug 2: No time-of-day filter at retrieval — a cafe could land at 9 PM.
-//   Bug 3: No category diversity tracking — cafe → cafe → cafe per day.
-//   Bug 4: No final overlap-audit pass — stops could land on busy blocks.
-//   Bug 5: Wrong slot architecture — multi-stop per window, not per-slot.
+//   1. Calendar-only schedule source. Both users must have Google Calendar
+//      connected. Manual entries on the user record are deliberately ignored
+//      (manual is Home-only). If either side lacks calendar → empty windows,
+//      reason: "calendar_required".
 //
-// New pipeline per shared free window:
+//   2. Today-only scoping. HOURS_AHEAD=24 caps the look-forward to the rest
+//      of today IST. Tomorrow is out of scope.
 //
-//   1. allocateSlots()        — carve human-shaped slots (60-90 min, 5-min
-//                               boundaries, busy-aware). Same logic as Home.
-//   2. retrieveVenues()       — per slot, with time-of-day bucket as HARD
-//                               FILTER + category diversity exclusion +
-//                               collabAllowedCategories() for zero-overlap
-//                               friend pairs.
-//   3. generatePlanForSlot()  — LLM picks ONE venue per slot, collaborative
-//                               prompt tells it to pick for two people.
-//   4. Overlap audit          — drop any stop that lands on a busy interval.
+//   3. Per-window slot allocation — allocateSlots() carves human-shaped
+//      slots (60–90min, 5-min boundaries, busy-aware) inside each shared
+//      free window.
 //
-// Function signature is unchanged so all UI / API callers keep working.
+//   4. Per-slot RAG retrieval with time-of-day HARD FILTER + category
+//      exclusion (for day-wide variety). Interest-aware carve-out lets
+//      cafes/bars/etc repeat when both users explicitly share that interest.
+//
+//   5. Friend-default fallback: when the two users share ZERO interests,
+//      retrieval is restricted to entertainment + restaurant + bar + cafe.
+//      Movies, bowling, food, drinks — the categories friends actually do
+//      together when "you both like X" isn't available.
+//
+//   6. Per-slot L3 generation tells the LLM it's planning for two people
+//      (the "collaborative" prompt branch).
+//
+//   7. Final audit: any LLM-picked stop overlapping a busy interval (from
+//      either calendar) is dropped. Three layers of defence — slot allocator
+//      hard-guards, the LLM constraint, this audit.
 
-import { allocateSlots, generatePlanForSlot, type PlanStop } from "@/lib/ai/plan";
+import { generatePlanForSlot, allocateSlots } from "@/lib/ai/plan";
 import { retrieveVenues } from "@/lib/ai/rag";
-import type { CalendarEvent } from "@/lib/calendar/events";
 import {
   buildBusyIntervals,
   hhmmToDateInWindow,
   overlapsAnyBusy,
+  type CalendarEvent,
 } from "@/lib/calendar/events";
 import { istTodayAtHHMM } from "@/lib/calendar/manualEvents";
-import { getMergedScheduleEvents } from "@/lib/calendar/schedule";
+import {
+  getCalendarOnlyEvents,
+  userHasCalendarSource,
+} from "@/lib/calendar/schedule";
 import {
   bucketForHour,
   DEFAULT_BIAS_LATLNG,
@@ -65,10 +72,11 @@ import type {
 import type { SaanjhUser } from "@/lib/types/user";
 
 const RAG_TOP_K = 8;
-const MIN_WINDOW_MINUTES = 45;
 const MAX_WINDOWS_PER_REQUEST = 4;
-// Day-wide venue stop cap — prevents Groq cost blowout on wide-open days.
+// Day-wide AI venue cap across all windows in one request.
 const MAX_TOTAL_STOPS = 5;
+// Calendar lookahead for the JOINT availability detector. Today-only —
+// matches the Home tab default and keeps the demo flow deterministic.
 const HOURS_AHEAD = 24;
 
 function durationMinutes(window: TimeWindow): number {
@@ -110,10 +118,14 @@ function clipEventsToToday(events: CalendarEvent[]): CalendarEvent[] {
 async function buildMergedCollabEvents(
   me: SaanjhUser,
   friend: SaanjhUser
-): Promise<CollabSerializedCalendarEvent[]> {
+): Promise<{
+  events: CalendarEvent[];
+  serialised: CollabSerializedCalendarEvent[];
+}> {
+  // Calendar-only — manual entries are Home-only and never reach this path.
   const [myEvents, friendEvents] = await Promise.all([
-    getMergedScheduleEvents(me, HOURS_AHEAD),
-    getMergedScheduleEvents(friend, HOURS_AHEAD),
+    getCalendarOnlyEvents(me, HOURS_AHEAD),
+    getCalendarOnlyEvents(friend, HOURS_AHEAD),
   ]);
 
   const meLabel = me.display_name?.trim() || "You";
@@ -132,7 +144,7 @@ async function buildMergedCollabEvents(
     })),
   ];
 
-  return serialiseEvents(tagged);
+  return { events: tagged, serialised: serialiseEvents(tagged) };
 }
 
 function buildTitle(
@@ -158,7 +170,6 @@ export async function generateCollabPlan(
   me: SaanjhUser,
   friend: SaanjhUser
 ): Promise<CollabPlanGenerateResponse> {
-  // ---- Compatibility payload (unchanged — UI reads this for the energy badge) ----
   const sharedInterestTags = intersectTags(
     me.interest_tags,
     friend.interest_tags
@@ -169,12 +180,22 @@ export async function generateCollabPlan(
   );
   const sharedDietaryTags = intersectTags(me.dietary_tags, friend.dietary_tags);
 
+  const interestTags = collabInterestTags(
+    me.interest_tags,
+    friend.interest_tags
+  );
+  const dietaryTags = collabDietaryTags(me.dietary_tags, friend.dietary_tags);
+  const allowedCategories = collabAllowedCategories(
+    me.interest_tags,
+    friend.interest_tags
+  );
+
   const energyAlignmentPercent = computeEnergyAlignmentPercent(
     me.interest_tags,
     friend.interest_tags
   );
 
-  const compatibility = {
+  const baseCompatibility = {
     energyAlignmentPercent,
     sharedInterestLabels: tagIdsToLabels(sharedInterestTags),
     sharedLifestyleLabels: tagIdsToLabels(sharedLifestyleTags),
@@ -182,16 +203,31 @@ export async function generateCollabPlan(
     friendDisplayName: friend.display_name,
   };
 
-  // ---- Shared free windows ----
-  const sharedWindows = await getTodaySharedFreeWindows(me, friend);
-
-  if (sharedWindows.length === 0) {
-    const events = await buildMergedCollabEvents(me, friend);
+  // ---- Gate: both users must have Google Calendar connected ----
+  if (!userHasCalendarSource(me) || !userHasCalendarSource(friend)) {
     return {
       friendId: friend.id,
       windows: [],
-      events,
-      compatibility,
+      events: [],
+      compatibility: baseCompatibility,
+      debug: {
+        totalWindows: 0,
+        plannedWindows: 0,
+        reason: "calendar_required",
+        ragTopK: RAG_TOP_K,
+      },
+    };
+  }
+
+  const sharedWindows = await getTodaySharedFreeWindows(me, friend);
+
+  if (sharedWindows.length === 0) {
+    const { serialised } = await buildMergedCollabEvents(me, friend);
+    return {
+      friendId: friend.id,
+      windows: [],
+      events: serialised,
+      compatibility: baseCompatibility,
       debug: {
         totalWindows: 0,
         plannedWindows: 0,
@@ -201,53 +237,7 @@ export async function generateCollabPlan(
     };
   }
 
-  // ---- Busy intervals (for slot allocator + final overlap audit) ----
-  // Merge both users' events into a single busy set so allocateSlots won't
-  // place a collab stop during either person's meeting.
-  const [myEvents, friendEvents] = await Promise.all([
-    getMergedScheduleEvents(me, HOURS_AHEAD),
-    getMergedScheduleEvents(friend, HOURS_AHEAD),
-  ]);
-  const combinedEvents = [
-    ...clipEventsToToday(myEvents),
-    ...clipEventsToToday(friendEvents),
-  ];
-  const busyIntervals = buildBusyIntervals(combinedEvents);
-
-  // ---- RAG signal setup ----
-  const dietaryTags = collabDietaryTags(me.dietary_tags, friend.dietary_tags);
-
-  // Interest tags: shared interests drive retrieval (same as Home).
-  // collabInterestTags falls back to union when zero shared — but we will
-  // also pass allowedCategories from collabAllowedCategories() which overrides
-  // the union with a social-category hard filter in the zero-overlap case.
-  const interestTags = collabInterestTags(
-    me.interest_tags,
-    friend.interest_tags
-  );
-
-  // Category filter: undefined when shared interests exist (they do the work),
-  // FRIEND_DEFAULT_CATEGORIES when zero overlap (hard social fallback).
-  const allowedCategoriesForFallback = collabAllowedCategories(
-    me.interest_tags,
-    friend.interest_tags
-  );
-
-  // Category diversity: honour the same repeatableCategories logic so a
-  // cafe_hopping friend pair can still get multiple cafes.
-  const repeatableCats = repeatableCategories([
-    ...me.interest_tags,
-    ...friend.interest_tags,
-  ]);
-
-  const friendName = friend.display_name?.trim() || "your friend";
-
-  // ---- Window filtering + metadata ----
-  const validWindows = sharedWindows.filter(
-    (w) => durationMinutes(w) >= MIN_WINDOW_MINUTES
-  );
-
-  const windowsWithMeta = validWindows.map((window) => ({
+  const windowsWithMeta = sharedWindows.map((window) => ({
     window,
     status: windowStatus(window),
     rangeLabel: formatWindowRangeIST(window),
@@ -258,25 +248,45 @@ export async function generateCollabPlan(
   const toPlan = planable.slice(0, MAX_WINDOWS_PER_REQUEST);
   const capped = planable.length > MAX_WINDOWS_PER_REQUEST;
 
-  // ---- Day-wide state (mirrors Home tab route.ts) ----
+  // Canonical busy intervals across BOTH users' calendars — used by the
+  // slot allocator AND the final audit pass.
+  const { events: combinedEvents, serialised } =
+    await buildMergedCollabEvents(me, friend);
+  const busyIntervals = buildBusyIntervals(combinedEvents);
+
+  const friendName = friend.display_name?.trim() || "your friend";
+
+  // Day-wide state for diversity + dedupe
   const usedCategories: string[] = [];
   const usedVenueIds = new Set<string>();
+  // Repeatable categories driven by interests the PAIR shares. A cafe-loving
+  // pair sees multiple cafes; a no-overlap pair gets the default rule.
+  const repeatableCats = repeatableCategories(sharedInterestTags);
   let stopsBudget = MAX_TOTAL_STOPS;
 
   const plannedByStart = new Map<number, CollabPlannedWindow>();
   let plannedCount = 0;
 
-  // ---- Per-window, per-slot generation ----
   for (const entry of toPlan) {
-    if (stopsBudget <= 0) break;
-
     const { window, status, rangeLabel, durationMinutes: mins } = entry;
-    const biasPoint = DEFAULT_BIAS_LATLNG;
+    if (stopsBudget <= 0) {
+      plannedByStart.set(window.start.getTime(), {
+        freeWindow: {
+          start: window.start.toISOString(),
+          end: window.end.toISOString(),
+        },
+        plan: emptyPlan(),
+        candidatesCount: 0,
+        status,
+        rangeLabel,
+        durationMinutes: mins,
+        skippedReason: "cap",
+      });
+      continue;
+    }
 
-    // Carve slots for this window — allocateSlots respects busy intervals and
-    // the day-wide stop budget.
+    // Carve human-shaped slots inside this shared free window
     const slots = allocateSlots(window, busyIntervals, stopsBudget);
-
     if (slots.length === 0) {
       plannedByStart.set(window.start.getTime(), {
         freeWindow: {
@@ -285,59 +295,49 @@ export async function generateCollabPlan(
         },
         plan: emptyPlan(),
         candidatesCount: 0,
-        status: status as SharedWindowStatus,
+        status,
         rangeLabel,
         durationMinutes: mins,
       });
       continue;
     }
 
-    const stops: PlanStop[] = [];
+    const stops: CollabPlanBody["stops"] = [];
     let totalCandidatesSeen = 0;
 
     for (const slot of slots) {
       if (stopsBudget <= 0) break;
 
-      // Category exclusion: already-used categories MINUS any that are
-      // repeatable for this friend pair's combined interests.
+      // Categories to exclude for THIS slot: previously used, minus any
+      // that are explicitly repeatable for the shared interests.
       const excludeCategories = usedCategories.filter(
         (c) => !(repeatableCats as Set<string>).has(c)
       );
 
-      // Per-slot RAG retrieval with time-of-day hard filter.
-      const rawCandidates = await retrieveVenues({
+      const candidates = await retrieveVenues({
         dietaryTags,
         interestTags,
         windowStart: slot.startDate,
         windowEnd: slot.endDate,
-        biasLat: biasPoint.lat,
-        biasLng: biasPoint.lng,
-        // Grow topK by already-used count so deduplication still yields RAG_TOP_K
-        // fresh candidates for the LLM.
-        topK: RAG_TOP_K + usedVenueIds.size,
-        timeOfDay: bucketForHour(slot.startDate),
+        biasLat: DEFAULT_BIAS_LATLNG.lat,
+        biasLng: DEFAULT_BIAS_LATLNG.lng,
+        allowedCategories,
         excludeCategories,
-        // Zero-overlap fallback: hard-filter to social categories.
-        allowedCategories: allowedCategoriesForFallback,
+        timeOfDay: bucketForHour(slot.startDate),
+        topK: RAG_TOP_K + usedVenueIds.size,
       });
 
-      // Drop venues already used today (day-wide dedupe).
-      const candidates = rawCandidates
-        .filter((c) => !usedVenueIds.has(c.venue.id))
-        .slice(0, RAG_TOP_K);
+      const fresh = candidates.filter((c) => !usedVenueIds.has(c.venue.id));
+      if (fresh.length === 0) continue;
 
-      if (candidates.length === 0) continue;
-      totalCandidatesSeen += candidates.length;
+      totalCandidatesSeen += fresh.length;
 
-      const stop = await generatePlanForSlot(
-        candidates,
-        slot,
-        [], // vibes: no mood image in collab flow — interests drive selection
-        { friendDisplayName: friendName }
-      );
+      const stop = await generatePlanForSlot(fresh, slot, [], {
+        friendDisplayName: friendName,
+      });
       if (!stop) continue;
 
-      // Final overlap audit: defence-in-depth on top of allocateSlots.
+      // Final overlap audit (defence-in-depth)
       const stopStart = hhmmToDateInWindow(stop.startTime, slot.startDate);
       const stopEnd = hhmmToDateInWindow(stop.endTime, slot.startDate);
       if (overlapsAnyBusy(stopStart, stopEnd, busyIntervals)) continue;
@@ -361,20 +361,18 @@ export async function generateCollabPlan(
         aiGenerated: stops.length > 0,
       },
       candidatesCount: totalCandidatesSeen,
-      status: status as SharedWindowStatus,
+      status,
       rangeLabel,
       durationMinutes: mins,
     });
   }
 
-  // ---- Assemble final windows array (all windows, including skipped) ----
   const windows: CollabPlannedWindow[] = windowsWithMeta.map((entry) => {
     const { window, status, rangeLabel, durationMinutes: mins } = entry;
     const key = window.start.getTime();
     const planned = plannedByStart.get(key);
     if (planned) return planned;
 
-    // Window was skipped — annotate why.
     let skippedReason: "past" | "cap" | undefined;
     if (status === "past") {
       skippedReason = "past";
@@ -400,13 +398,11 @@ export async function generateCollabPlan(
     };
   });
 
-  const events = await buildMergedCollabEvents(me, friend);
-
   return {
     friendId: friend.id,
     windows,
-    events,
-    compatibility,
+    events: serialised,
+    compatibility: baseCompatibility,
     debug: {
       totalWindows: windows.length,
       plannedWindows: plannedCount,

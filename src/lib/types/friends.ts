@@ -178,7 +178,7 @@ export interface CollabPlanCompatibilityMeta {
 export interface CollabPlanGenerateDebug {
   totalWindows: number;
   plannedWindows: number;
-  reason?: "no_shared_windows";
+  reason?: "no_shared_windows" | "calendar_required";
   cappedAt?: number;
   ragTopK?: number;
 }
