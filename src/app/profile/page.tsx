@@ -392,6 +392,7 @@ const DEMO_WARDROBE: WardrobeItem[] = [
 const DEMO_CALENDARS: ConnectedCalendar[] = [
   { id: "c1", user_id: "demo", name: "Personal iCloud", provider: "icloud", is_connected: true, last_synced_at: new Date().toISOString(), created_at: "" },
   { id: "c2", user_id: "demo", name: "Professional Google", provider: "google", is_connected: true, last_synced_at: new Date().toISOString(), created_at: "" },
+  { id: "c3", user_id: "demo", name: "Outlook Calendar (Coming Soon)", provider: "outlook", is_connected: false, last_synced_at: null, created_at: "" },
 ];
 
 const DEMO_DIETARY: DietarySettings = {
@@ -542,13 +543,20 @@ export default function ProfilePage() {
     const next = !cal.is_connected;
     setCalendars(cs => cs.map(c => c.id === cal.id ? { ...c, is_connected: next, last_synced_at: next ? new Date().toISOString() : null } : c));
     try {
-      await fetch("/api/calendars", {
+      const res = await fetch("/api/calendars", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: cal.id, is_connected: next }),
       });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || "Failed to update calendar connection");
+      }
       showToast(next ? `${cal.name} connected` : `${cal.name} disconnected`);
-    } catch { }
+    } catch (err) {
+      setCalendars(cs => cs.map(c => c.id === cal.id ? { ...c, is_connected: cal.is_connected, last_synced_at: cal.last_synced_at } : c));
+      showToast(err instanceof Error ? err.message : "Failed to update calendar status");
+    }
   }, [showToast]);
 
   const handleToggleDietary = useCallback(async (label: string) => {
