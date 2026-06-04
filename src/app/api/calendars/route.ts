@@ -32,8 +32,18 @@ export async function GET() {
       created_at: user.created_at,
     };
 
-    // Return only these two; icloud is marked as "Coming Soon" (is_connected: false)
-    return NextResponse.json([googleCal, icloudCal]);
+    const outlookCal: ConnectedCalendar = {
+      id: "outlook",
+      user_id: user.id,
+      name: "Outlook Calendar (Coming Soon)",
+      provider: "outlook",
+      is_connected: false,
+      last_synced_at: null,
+      created_at: user.created_at,
+    };
+
+    // Return all three; icloud and outlook are marked as "Coming Soon" (is_connected: false)
+    return NextResponse.json([googleCal, icloudCal, outlookCal]);
   } catch (e) {
     const message = e instanceof Error ? e.message : "Server error";
     return NextResponse.json({ error: message }, { status: 500 });
@@ -54,6 +64,10 @@ export async function PATCH(request: Request) {
 
     if (id === "icloud") {
       return NextResponse.json({ error: "iCloud Calendar is coming soon!" }, { status: 400 });
+    }
+
+    if (id === "outlook") {
+      return NextResponse.json({ error: "Outlook Calendar is coming soon!" }, { status: 400 });
     }
 
     if (id === "google") {

@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import { CATEGORY_LABEL, COLOR_SWATCH, OCCASION_LABEL, SEASON_LABEL} from "@/lib/constants/wardrobe";
 import type { WardrobeItemDTO } from "@/lib/types/wardrobe";
 import { cn } from "@/lib/utils/cn";
@@ -24,12 +23,11 @@ export function WardrobeItemCard({
       )}
     >
       {/* Photo */}
-      <Image
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
         src={item.photoUrl}
         alt={item.category ? CATEGORY_LABEL[item.category] : "Wardrobe item"}
-        fill
-        className="object-cover"
-        sizes="(max-width: 540px) 45vw, 240px"
+        className="absolute inset-0 h-full w-full object-cover"
       />
 
       {/* Top gradient scrim for badge legibility */}
