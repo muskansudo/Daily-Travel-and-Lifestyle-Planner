@@ -12,6 +12,10 @@ import type {
 import { DEFAULT_BIAS_LATLNG } from "@/lib/constants/venues";
 import { getVenueCategoryImageUrl } from "@/lib/venues/categoryImages";
 import { istTodayAtHHMM } from "@/lib/calendar/manualEvents";
+import {
+  PLANNING_QUIET_HOURS_ERROR,
+  PLANNING_QUIET_HOURS_MESSAGE,
+} from "@/lib/planning/quietHours";
 
 export interface SerializedCalendarEvent {
   id: string;
@@ -330,8 +334,15 @@ export async function requestPlanGeneration(
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as {
       error?: string;
+      message?: string;
     } | null;
-    throw new Error(payload?.error ?? "Plan generation failed");
+    throw new Error(
+      payload?.error === PLANNING_QUIET_HOURS_ERROR
+        ? payload.message ?? PLANNING_QUIET_HOURS_MESSAGE
+        : typeof payload?.error === "string"
+          ? payload.error
+          : "Plan generation failed"
+    );
   }
 
   return response.json() as Promise<PlanGenerateResponse>;
@@ -355,10 +366,14 @@ export async function requestStopReplacement(
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as {
       error?: string;
+      message?: string;
     } | null;
     return {
       newStop: null,
-      error: payload?.error ?? "Replace failed",
+      error:
+        payload?.error === PLANNING_QUIET_HOURS_ERROR
+          ? payload.message ?? PLANNING_QUIET_HOURS_MESSAGE
+          : payload?.error ?? "Replace failed",
     };
   }
 
@@ -405,5 +420,5 @@ export function venueIdsInResponse(response: PlanGenerateResponse): string[] {
       ids.add(stop.venueId);
     }
   }
-  return [...ids];
+  return Array.from(ids);
 }

@@ -23,6 +23,12 @@ import { PlanTimeline } from "@/components/home/PlanTimeline";
 import { VenueCarousel } from "@/components/home/VenueCarousel";
 import { EnergyAlignmentBadge } from "@/components/friends/EnergyAlignmentBadge";
 import { energyAlignmentTier } from "@/lib/friends/alignment";
+import {
+  isPlanningQuietHours,
+  PLANNING_QUIET_HOURS_ERROR,
+  PLANNING_QUIET_HOURS_MESSAGE,
+} from "@/lib/planning/quietHours";
+import { PlanningQuietHoursNotice } from "@/components/planning/PlanningQuietHoursNotice";
 import { staggerContainer, staggerItem } from "@/components/home/animations";
 import type { TimelineItem } from "@/lib/types/home";
 import type { VenueRecommendation } from "@/lib/types/home";
@@ -94,9 +100,17 @@ export function CollabPlanPageClient({ friendId }: { friendId: string }) {
     displayName: null,
     profilePhotoUrl: null,
   });
+  const [quietHours, setQuietHours] = useState(() => isPlanningQuietHours());
 
   const responseRef = useRef<CollabPlanGenerateResponse | null>(null);
   const generateStarted = useRef(false);
+
+  useEffect(() => {
+    const syncQuietHours = () => setQuietHours(isPlanningQuietHours());
+    syncQuietHours();
+    const interval = window.setInterval(syncQuietHours, 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const runGenerate = useCallback(async () => {
     setError(null);
@@ -109,11 +123,16 @@ export function CollabPlanPageClient({ friendId }: { friendId: string }) {
       });
       const data = (await res.json()) as CollabPlanGenerateResponse & {
         error?: string;
+        message?: string;
       };
 
       if (!res.ok) {
         throw new Error(
-          typeof data.error === "string" ? data.error : "Generation failed"
+          data.error === PLANNING_QUIET_HOURS_ERROR
+            ? data.message ?? PLANNING_QUIET_HOURS_MESSAGE
+            : typeof data.error === "string"
+              ? data.error
+              : "Generation failed"
         );
       }
 
@@ -169,6 +188,7 @@ export function CollabPlanPageClient({ friendId }: { friendId: string }) {
 
   useEffect(() => {
     if (generateStarted.current) return;
+    if (isPlanningQuietHours()) return;
     generateStarted.current = true;
     void runGenerate();
   }, [runGenerate]);
@@ -263,7 +283,11 @@ export function CollabPlanPageClient({ friendId }: { friendId: string }) {
           </div>
         )}
 
-        {error && (
+        {quietHours && pageState === "initial" && (
+          <PlanningQuietHoursNotice />
+        )}
+
+        {error && !quietHours && (
           <div className="glass-panel silk-border rounded-2xl p-4 text-center">
             <p className="font-montserrat text-sm text-error">{error}</p>
             {pageState === "initial" && (
@@ -326,6 +350,9 @@ export function CollabPlanPageClient({ friendId }: { friendId: string }) {
                     <VenueCarousel venues={venues} />
                   </motion.div>
                 )}
+                {quietHours && (
+                  <PlanningQuietHoursNotice />
+                )}
                 <motion.div variants={staggerItem} className="space-y-3">
                   {canSave && (
                     <PremiumButton
@@ -339,13 +366,14 @@ export function CollabPlanPageClient({ friendId }: { friendId: string }) {
                   <button
                     type="button"
                     onClick={() => {
+                      if (quietHours) return;
                       generateStarted.current = true;
                       responseRef.current = null;
                       setPageState("generating");
                       void runGenerate();
                     }}
-                    disabled={saving}
-                    className="flex w-full items-center justify-center gap-2 rounded-full border border-white/60 bg-white/30 py-3.5 font-montserrat text-sm font-semibold uppercase tracking-wider text-primary backdrop-blur-md"
+                    disabled={saving || quietHours}
+                    className="flex w-full items-center justify-center gap-2 rounded-full border border-white/60 bg-white/30 py-3.5 font-montserrat text-sm font-semibold uppercase tracking-wider text-primary backdrop-blur-md disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <span className="material-symbols-outlined text-[18px]">
                       refresh

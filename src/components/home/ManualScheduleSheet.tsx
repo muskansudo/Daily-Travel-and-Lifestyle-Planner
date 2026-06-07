@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { ManualScheduleEntry } from "@/lib/types/home";
+import { PlanningQuietHoursNotice } from "@/components/planning/PlanningQuietHoursNotice";
 import {
   backdropVariants,
   sheetVariants,
@@ -32,11 +33,13 @@ export function ManualScheduleSheet({
   onClose,
   entries,
   onSave,
+  quietHours = false,
 }: {
   open: boolean;
   onClose: () => void;
   entries: ManualScheduleEntry[];
   onSave: (entries: ManualScheduleEntry[]) => void;
+  quietHours?: boolean;
 }) {
   const [localEntries, setLocalEntries] = useState<ManualScheduleEntry[]>(
     entries.length > 0 ? entries : [EMPTY_ENTRY()]
@@ -132,6 +135,12 @@ export function ManualScheduleSheet({
                 </span>
               </motion.button>
             </div>
+
+            {quietHours && (
+              <div className="px-6 pb-4">
+                <PlanningQuietHoursNotice variant="inline" />
+              </div>
+            )}
 
             <div className="no-scrollbar max-h-[50dvh] overflow-y-auto px-6 pb-4">
               <motion.div

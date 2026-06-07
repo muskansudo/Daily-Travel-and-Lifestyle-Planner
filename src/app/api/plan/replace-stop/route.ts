@@ -37,6 +37,10 @@
 
 import { NextResponse } from "next/server";
 import { getOrCreateDbUser, requireAuth } from "@/lib/auth";
+import {
+  isPlanningQuietHours,
+  planningQuietHoursPayload,
+} from "@/lib/planning/quietHours";
 import { retrieveVenues } from "@/lib/ai/rag";
 import {
   generatePlanForSlot,
@@ -94,6 +98,10 @@ export async function POST(request: Request) {
     !Array.isArray(body.excludeVenueIds)
   ) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+  }
+
+  if (isPlanningQuietHours()) {
+    return NextResponse.json(planningQuietHoursPayload(), { status: 403 });
   }
 
   try {

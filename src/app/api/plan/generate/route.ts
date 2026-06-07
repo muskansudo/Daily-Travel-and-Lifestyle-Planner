@@ -40,6 +40,10 @@
 
 import { NextResponse } from "next/server";
 import { getOrCreateDbUser, requireAuth } from "@/lib/auth";
+import {
+  isPlanningQuietHours,
+  planningQuietHoursPayload,
+} from "@/lib/planning/quietHours";
 import { extractMoodFromImage, type MoodResult } from "@/lib/ai/mood";
 import { retrieveVenues } from "@/lib/ai/rag";
 import {
@@ -109,6 +113,10 @@ export async function POST(request: Request) {
   const clerkId = await requireAuth();
   if (!clerkId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (isPlanningQuietHours()) {
+    return NextResponse.json(planningQuietHoursPayload(), { status: 403 });
   }
 
   try {

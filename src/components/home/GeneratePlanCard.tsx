@@ -1,6 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { PlanningQuietHoursNotice } from "@/components/planning/PlanningQuietHoursNotice";
 import { fadeUp } from "./animations";
 
 export function GeneratePlanCard({
@@ -8,6 +9,7 @@ export function GeneratePlanCard({
   onManualSchedule,
   onViewDay,
   disabled,
+  quietHours = false,
   manualEntryCount = 0,
   hasGeneratedPlan = false,
 }: {
@@ -15,10 +17,12 @@ export function GeneratePlanCard({
   onManualSchedule: () => void;
   onViewDay?: () => void;
   disabled?: boolean;
+  quietHours?: boolean;
   manualEntryCount?: number;
   hasGeneratedPlan?: boolean;
 }) {
   const showStatusRow = manualEntryCount > 0 || hasGeneratedPlan;
+  const generateDisabled = disabled || quietHours;
   return (
     <motion.section
       variants={fadeUp}
@@ -68,13 +72,19 @@ export function GeneratePlanCard({
           )}
         </div>
 
+        {quietHours && (
+          <div className="mb-4">
+            <PlanningQuietHoursNotice />
+          </div>
+        )}
+
         <div className="space-y-3">
           <motion.button
             type="button"
-            disabled={disabled}
+            disabled={generateDisabled}
             onClick={onGenerate}
-            whileHover={disabled ? undefined : { scale: 1.01, y: -2 }}
-            whileTap={disabled ? undefined : { scale: 0.98 }}
+            whileHover={generateDisabled ? undefined : { scale: 1.01, y: -2 }}
+            whileTap={generateDisabled ? undefined : { scale: 0.98 }}
             className="btn-premium flex w-full items-center justify-center gap-2 rounded-full py-4 font-montserrat text-sm font-semibold uppercase tracking-wider disabled:cursor-not-allowed"
           >
             <span className="material-symbols-outlined text-[20px]">

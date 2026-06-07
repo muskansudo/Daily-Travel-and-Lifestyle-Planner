@@ -31,6 +31,10 @@ import {
   loadDailyPlan,
   saveDailyPlan,
 } from "@/lib/home/dailyPlanStorage";
+import {
+  isPlanningQuietHours,
+} from "@/lib/planning/quietHours";
+import { PlanningQuietHoursNotice } from "@/components/planning/PlanningQuietHoursNotice";
 import { AuroraBackground } from "@/components/ui/AuroraBackground";
 import { HomeHeader } from "./HomeHeader";
 import { VibeSelector } from "@/components/home/VibeSelector";
@@ -125,8 +129,16 @@ export function HomePageClient({
     id: string;
     message: string;
   } | null>(null);
+  const [quietHours, setQuietHours] = useState(() => isPlanningQuietHours());
 
   const planResponseRef = useRef<PlanGenerateResponse | null>(null);
+
+  useEffect(() => {
+    const syncQuietHours = () => setQuietHours(isPlanningQuietHours());
+    syncQuietHours();
+    const interval = window.setInterval(syncQuietHours, 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     const stored = loadDailyPlan();
@@ -266,9 +278,9 @@ export function HomePageClient({
 
       try {
         const dayWideIds = venueIdsInResponse(response);
-        const excludeVenueIds = [
-          ...new Set([...dayWideIds, ...rejectedVenueIds, venueId]),
-        ];
+        const excludeVenueIds = Array.from(
+          new Set([...dayWideIds, ...rejectedVenueIds, venueId])
+        );
 
         const result = await requestStopReplacement({
           venueIdToReplace: venueId,
@@ -365,6 +377,7 @@ export function HomePageClient({
                   onGenerate={() => void handleGenerate()}
                   onManualSchedule={() => setManualSheetOpen(true)}
                   onViewDay={handleViewDay}
+                  quietHours={quietHours}
                   manualEntryCount={manualEntries.length}
                   hasGeneratedPlan={generatedPlan !== null}
                 />
@@ -408,7 +421,9 @@ export function HomePageClient({
                         ? "Connect a calendar to see your day's rhythm"
                         : undefined
                     }
-                    onSkipStop={(item) => void handleSkipStop(item)}
+                    onSkipStop={
+                      quietHours ? undefined : (item) => void handleSkipStop(item)
+                    }
                     skippingId={skippingItemId}
                     skipError={skipError}
                   />
@@ -422,13 +437,19 @@ export function HomePageClient({
                 <motion.div variants={staggerItem}>
                   <EveningReflection />
                 </motion.div>
+                {quietHours && (
+                  <motion.div variants={staggerItem}>
+                    <PlanningQuietHoursNotice />
+                  </motion.div>
+                )}
                 <motion.div variants={staggerItem} className="pt-2">
                   <motion.button
                     type="button"
                     onClick={handleRegenerate}
-                    whileHover={{ scale: 1.01 }}
-                    whileTap={{ scale: 0.98 }}
-                    className="flex w-full items-center justify-center gap-2 rounded-full border border-white/60 bg-white/30 py-3.5 font-montserrat text-sm font-semibold uppercase tracking-wider text-primary backdrop-blur-md transition-colors hover:bg-white/50"
+                    disabled={quietHours}
+                    whileHover={quietHours ? undefined : { scale: 1.01 }}
+                    whileTap={quietHours ? undefined : { scale: 0.98 }}
+                    className="flex w-full items-center justify-center gap-2 rounded-full border border-white/60 bg-white/30 py-3.5 font-montserrat text-sm font-semibold uppercase tracking-wider text-primary backdrop-blur-md transition-colors hover:bg-white/50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <span className="material-symbols-outlined text-[18px]">
                       refresh
@@ -447,6 +468,7 @@ export function HomePageClient({
         onClose={() => setManualSheetOpen(false)}
         entries={manualEntries}
         onSave={handleManualSave}
+        quietHours={quietHours}
       />
 
       <BottomNav activeTab="today" />

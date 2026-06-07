@@ -1,10 +1,12 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { CompatibilityPayload } from "@/lib/types/friends";
 import { backdropVariants, sheetVariants } from "@/components/home/animations";
+import { PlanningQuietHoursNotice } from "@/components/planning/PlanningQuietHoursNotice";
+import { isPlanningQuietHours } from "@/lib/planning/quietHours";
 import { PremiumButton } from "@/components/ui/PremiumButton";
 
 function TagSection({
@@ -68,6 +70,7 @@ export function CompatibilitySheet({
 }) {
   const router = useRouter();
   const name = compatibility?.friendDisplayName?.trim() || "your friend";
+  const [quietHours, setQuietHours] = useState(() => isPlanningQuietHours());
 
   useEffect(() => {
     if (!open) return;
@@ -77,8 +80,16 @@ export function CompatibilitySheet({
     };
   }, [open]);
 
+  useEffect(() => {
+    if (!open) return;
+    const syncQuietHours = () => setQuietHours(isPlanningQuietHours());
+    syncQuietHours();
+    const interval = window.setInterval(syncQuietHours, 60_000);
+    return () => window.clearInterval(interval);
+  }, [open]);
+
   const initiateProposal = () => {
-    if (!friendId || !compatibility) return;
+    if (!friendId || !compatibility || quietHours) return;
     onClose();
     router.push(`/friends/${friendId}/plan`);
   };
@@ -199,9 +210,16 @@ export function CompatibilitySheet({
                   />
                 </div>
 
+                {quietHours && (
+                  <div className="mb-4">
+                    <PlanningQuietHoursNotice />
+                  </div>
+                )}
+
                 <PremiumButton
                   type="button"
                   onClick={initiateProposal}
+                  disabled={quietHours}
                   className="mb-2"
                 >
                   Initiate Proposal

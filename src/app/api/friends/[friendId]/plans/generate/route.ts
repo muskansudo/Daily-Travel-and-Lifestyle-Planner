@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { getOrCreateDbUser, getDbUserById, requireAuth } from "@/lib/auth";
 import { FriendshipError, assertFriendship } from "@/lib/friends/assertFriendship";
 import { generateCollabPlan } from "@/lib/friends/generateCollabPlan";
+import {
+  isPlanningQuietHours,
+  planningQuietHoursPayload,
+} from "@/lib/planning/quietHours";
 
 export async function POST(
   _request: Request,
@@ -10,6 +14,10 @@ export async function POST(
   const clerkId = await requireAuth();
   if (!clerkId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (isPlanningQuietHours()) {
+    return NextResponse.json(planningQuietHoursPayload(), { status: 403 });
   }
 
   try {
