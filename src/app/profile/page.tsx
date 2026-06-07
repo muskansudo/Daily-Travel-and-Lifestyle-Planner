@@ -398,19 +398,53 @@ const DEMO_CALENDARS: ConnectedCalendar[] = [
 const DEMO_DIETARY: DietarySettings = {
   id: "d1", user_id: "demo", updated_at: "",
   preferences: [
-    { label: "Plant-Based Focus", icon: "🌿", is_active: true },
-    { label: "Gluten Free", icon: "🌾", is_active: false },
-    { label: "Dairy Free", icon: "🥛", is_active: false },
-    { label: "Vegetarian", icon: "🥗", is_active: false },
     { label: "Vegan", icon: "🌱", is_active: false },
-    { label: "Jain", icon: "🪷", is_active: false },
+    { label: "Vegetarian", icon: "🥗", is_active: true },
+    { label: "Gluten-Free", icon: "🌾", is_active: false },
     { label: "Halal", icon: "🌙", is_active: false },
-    { label: "Low Carb", icon: "⚡", is_active: false },
+    { label: "Jain", icon: "🪷", is_active: false },
     { label: "Keto", icon: "🥑", is_active: false },
-    { label: "Intermittent Fasting", icon: "⏰", is_active: false },
+    { label: "Everything", icon: "🍽️", is_active: false },
   ],
   allergies: [],
   nutrition_goal: null,
+};
+
+interface GenericPreference {
+  id: string;
+  label: string;
+  icon: string;
+  is_active: boolean;
+}
+
+interface GenericPreferenceSettings {
+  preferences: GenericPreference[];
+}
+
+const DEMO_LIFESTYLE: GenericPreferenceSettings = {
+  preferences: [
+    { id: "active", label: "Active", icon: "⚡", is_active: true },
+    { id: "relaxed", label: "Relaxed", icon: "🧘", is_active: true },
+    { id: "social", label: "Social", icon: "🗣️", is_active: false },
+    { id: "focused", label: "Focused", icon: "🎯", is_active: false },
+    { id: "adventurous", label: "Adventurous", icon: "🧗", is_active: false },
+    { id: "minimalist", label: "Minimalist", icon: "🌿", is_active: true },
+  ],
+};
+
+const DEMO_INTERESTS: GenericPreferenceSettings = {
+  preferences: [
+    { id: "art", label: "Art", icon: "🎨", is_active: true },
+    { id: "parks", label: "Parks", icon: "🌳", is_active: true },
+    { id: "fashion", label: "Fashion", icon: "👔", is_active: true },
+    { id: "cafe_hopping", label: "Café hopping", icon: "☕", is_active: true },
+    { id: "museum", label: "Museums", icon: "🏛️", is_active: false },
+    { id: "walks", label: "Walks", icon: "🚶", is_active: true },
+    { id: "workout", label: "Workout", icon: "💪", is_active: false },
+    { id: "night_out", label: "Night out", icon: "🥂", is_active: false },
+    { id: "photography", label: "Photography", icon: "📷", is_active: true },
+    { id: "music", label: "Music", icon: "🎵", is_active: true },
+  ],
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -421,6 +455,8 @@ export default function ProfilePage() {
   const [wardrobe, setWardrobe] = useState<WardrobeItem[]>([]);
   const [calendars, setCalendars] = useState<ConnectedCalendar[]>([]);
   const [dietary, setDietary] = useState<DietarySettings | null>(null);
+  const [lifestyle, setLifestyle] = useState<GenericPreferenceSettings | null>(null);
+  const [interests, setInterests] = useState<GenericPreferenceSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [weather, setWeather] = useState<WeatherInfo>(MOCK_WEATHER);
 
@@ -439,11 +475,13 @@ export default function ProfilePage() {
   useEffect(() => {
     (async () => {
       try {
-        const [pRes, wRes, cRes, dRes, weatherRes] = await Promise.allSettled([
+        const [pRes, wRes, cRes, dRes, lRes, iRes, weatherRes] = await Promise.allSettled([
           fetch("/api/profile"),
           fetch("/api/wardrobe"),
           fetch("/api/calendars"),
           fetch("/api/dietary"),
+          fetch("/api/lifestyle"),
+          fetch("/api/interests"),
           fetch("/api/weather"),
         ]);
 
@@ -465,6 +503,14 @@ export default function ProfilePage() {
           setDietary(await dRes.value.json());
         } else setDietary(DEMO_DIETARY);
 
+        if (lRes.status === "fulfilled" && lRes.value.ok) {
+          setLifestyle(await lRes.value.json());
+        } else setLifestyle(DEMO_LIFESTYLE);
+
+        if (iRes.status === "fulfilled" && iRes.value.ok) {
+          setInterests(await iRes.value.json());
+        } else setInterests(DEMO_INTERESTS);
+
         if (weatherRes.status === "fulfilled" && weatherRes.value.ok) {
           const data = (await weatherRes.value.json()) as { weather?: WeatherInfo };
           if (data.weather) setWeather(data.weather);
@@ -474,6 +520,8 @@ export default function ProfilePage() {
         setWardrobe(DEMO_WARDROBE);
         setCalendars(DEMO_CALENDARS);
         setDietary(DEMO_DIETARY);
+        setLifestyle(DEMO_LIFESTYLE);
+        setInterests(DEMO_INTERESTS);
       } finally {
         setLoading(false);
       }
@@ -559,12 +607,12 @@ export default function ProfilePage() {
     }
   }, [showToast]);
 
-  const handleToggleDietary = useCallback(async (label: string) => {
+  const handleToggleDietary = useCallback(async (idOrLabel: string) => {
     if (!dietary) return;
     const updated = {
       ...dietary,
       preferences: dietary.preferences.map(p =>
-        p.label === label ? { ...p, is_active: !p.is_active } : p
+        (p.id === idOrLabel || p.label === idOrLabel) ? { ...p, is_active: !p.is_active } : p
       ),
     };
     setDietary(updated);
@@ -576,6 +624,42 @@ export default function ProfilePage() {
       });
     } catch { }
   }, [dietary]);
+
+  const handleToggleLifestyle = useCallback(async (idOrLabel: string) => {
+    if (!lifestyle) return;
+    const updated = {
+      ...lifestyle,
+      preferences: lifestyle.preferences.map(p =>
+        (p.id === idOrLabel || p.label === idOrLabel) ? { ...p, is_active: !p.is_active } : p
+      ),
+    };
+    setLifestyle(updated);
+    try {
+      await fetch("/api/lifestyle", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preferences: updated.preferences }),
+      });
+    } catch { }
+  }, [lifestyle]);
+
+  const handleToggleInterests = useCallback(async (idOrLabel: string) => {
+    if (!interests) return;
+    const updated = {
+      ...interests,
+      preferences: interests.preferences.map(p =>
+        (p.id === idOrLabel || p.label === idOrLabel) ? { ...p, is_active: !p.is_active } : p
+      ),
+    };
+    setInterests(updated);
+    try {
+      await fetch("/api/interests", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preferences: updated.preferences }),
+      });
+    } catch { }
+  }, [interests]);
 
   const headerName = profile?.display_name ?? "there";
   const headerPhoto = profile?.avatar_url ?? null;
@@ -776,18 +860,18 @@ export default function ProfilePage() {
         </section>
 
         {/* ── DIETARY PREFERENCES ───────────────────────────────────── */}
-        <section className="mt-6 mb-6">
+        <section className="mt-6">
           <SectionTitle className="mb-3">Dietary Preferences</SectionTitle>
 
           <GlassCard>
             <div className="flex flex-wrap gap-2">
               {dietary?.preferences.map(pref => (
                 <PreferenceChip
-                  key={pref.label}
+                  key={pref.id || pref.label}
                   label={pref.label}
                   icon={pref.icon}
                   selected={pref.is_active}
-                  onClick={() => handleToggleDietary(pref.label)}
+                  onClick={() => handleToggleDietary(pref.id || pref.label)}
                 />
               ))}
             </div>
@@ -816,6 +900,44 @@ export default function ProfilePage() {
                 <p className="font-montserrat text-[13px] text-on-surface">{dietary.nutrition_goal}</p>
               </div>
             )}
+          </GlassCard>
+        </section>
+
+        {/* ── LIFESTYLE PREFERENCES ───────────────────────────────────── */}
+        <section className="mt-6">
+          <SectionTitle className="mb-3">Lifestyle Preferences</SectionTitle>
+
+          <GlassCard>
+            <div className="flex flex-wrap gap-2">
+              {lifestyle?.preferences.map(pref => (
+                <PreferenceChip
+                  key={pref.id}
+                  label={pref.label}
+                  icon={pref.icon}
+                  selected={pref.is_active}
+                  onClick={() => handleToggleLifestyle(pref.id)}
+                />
+              ))}
+            </div>
+          </GlassCard>
+        </section>
+
+        {/* ── INTEREST PREFERENCES ───────────────────────────────────── */}
+        <section className="mt-6 mb-6">
+          <SectionTitle className="mb-3">Interest Preferences</SectionTitle>
+
+          <GlassCard>
+            <div className="flex flex-wrap gap-2">
+              {interests?.preferences.map(pref => (
+                <PreferenceChip
+                  key={pref.id}
+                  label={pref.label}
+                  icon={pref.icon}
+                  selected={pref.is_active}
+                  onClick={() => handleToggleInterests(pref.id)}
+                />
+              ))}
+            </div>
           </GlassCard>
         </section>
 
