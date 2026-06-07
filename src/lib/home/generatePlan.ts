@@ -1,3 +1,5 @@
+// DROP IN AT: src/lib/home/generatePlan.ts (REPLACES existing file)
+
 import type { Plan, PlanStop } from "@/lib/ai/plan";
 import type { MoodResult } from "@/lib/ai/mood";
 import type {
@@ -49,6 +51,25 @@ export interface GeneratePlanRequestOptions {
   allowedNeighborhoods?: string[];
   allowedCategories?: string[];
   hoursAhead?: number;
+}
+
+// ---- Skip-this-stop replacement contract ----
+
+export interface ReplaceStopRequest {
+  venueIdToReplace: string;
+  slot: { startTime: string; endTime: string };
+  excludeVenueIds: string[];
+  vibes: string[];
+  manualEntries?: ManualScheduleEntry[];
+  allowedNeighborhoods?: string[];
+  allowedCategories?: string[];
+  hoursAhead?: number;
+}
+
+export interface ReplaceStopResponse {
+  newStop: PlanStop | null;
+  reason?: "no_alternatives" | "groq_failed" | "overlap_busy";
+  error?: string;
 }
 
 const CATEGORY_ICONS: Record<string, string> = {
@@ -314,4 +335,75 @@ export async function requestPlanGeneration(
   }
 
   return response.json() as Promise<PlanGenerateResponse>;
+}
+
+// ---- Skip-this-stop helpers ----
+
+/**
+ * Ask the backend to regenerate one specific slot, excluding the rejected
+ * venue (and any others the user has already skipped this session).
+ */
+export async function requestStopReplacement(
+  body: ReplaceStopRequest
+): Promise<ReplaceStopResponse> {
+  const response = await fetch("/api/plan/replace-stop", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as {
+      error?: string;
+    } | null;
+    return {
+      newStop: null,
+      error: payload?.error ?? "Replace failed",
+    };
+  }
+
+  return response.json() as Promise<ReplaceStopResponse>;
+}
+
+/**
+ * Produce a new PlanGenerateResponse with one stop swapped out for another.
+ * Used to mutate the cached response after a successful skip without
+ * regenerating the entire day. Matches on venueId + startTime so identical
+ * venue ids appearing in different slots (shouldn't happen, but defensive)
+ * don't accidentally collide.
+ */
+export function replaceStopInResponse(
+  response: PlanGenerateResponse,
+  oldVenueId: string,
+  oldStartTime: string,
+  newStop: PlanStop
+): PlanGenerateResponse {
+  return {
+    ...response,
+    windows: response.windows.map((window) => ({
+      ...window,
+      plan: {
+        ...window.plan,
+        stops: window.plan.stops.map((stop) =>
+          stop.venueId === oldVenueId && stop.startTime === oldStartTime
+            ? newStop
+            : stop
+        ),
+      },
+    })),
+  };
+}
+
+/**
+ * Pull the unique venue ids from a response so the client can pass them as
+ * the day-wide dedupe list when requesting a replacement.
+ */
+export function venueIdsInResponse(response: PlanGenerateResponse): string[] {
+  const ids = new Set<string>();
+  for (const window of response.windows) {
+    for (const stop of window.plan.stops) {
+      ids.add(stop.venueId);
+    }
+  }
+  return [...ids];
 }

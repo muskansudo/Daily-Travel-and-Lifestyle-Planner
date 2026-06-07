@@ -1,3 +1,5 @@
+// DROP IN AT: src/components/home/PlanTimeline.tsx (REPLACES existing file)
+
 "use client";
 
 import { motion } from "framer-motion";
@@ -33,9 +35,22 @@ function formatTimeRange(time: string, endTime?: string): string {
 export function PlanTimeline({
   items,
   emptyMessage,
+  onSkipStop,
+  skippingId,
+  skipError,
 }: {
   items: TimelineItem[];
   emptyMessage?: string;
+  // Called when the user taps "Skip" on a plan_stop item. Optional so other
+  // call sites (e.g. friends/CollabPlanPageClient) can still render the
+  // timeline read-only.
+  onSkipStop?: (item: TimelineItem) => void;
+  // Id of the item currently being replaced. Used to show a loading state
+  // and disable the button while the request is in flight.
+  skippingId?: string | null;
+  // { id, message } for the most recent skip that returned no alternative.
+  // Rendered inline next to the original (still-present) stop.
+  skipError?: { id: string; message: string } | null;
 }) {
   if (items.length === 0) {
     return (
@@ -75,6 +90,9 @@ export function PlanTimeline({
           const accent = accentStyles[item.accent ?? "primary"];
           const isCalendarEvent = item.kind === "calendar_event";
           const isEmptyWindow = item.kind === "empty_window";
+          const isPlanStop = item.kind === "plan_stop";
+          const isSkipping = skippingId === item.id;
+          const showSkipError = skipError?.id === item.id;
 
           return (
             <motion.div key={item.id} variants={staggerItem} className="relative">
@@ -91,7 +109,8 @@ export function PlanTimeline({
                 className={cn(
                   "glass-panel silk-border rounded-2xl p-4",
                   isCalendarEvent && "opacity-90",
-                  isEmptyWindow && "border-dashed"
+                  isEmptyWindow && "border-dashed",
+                  isSkipping && "opacity-60"
                 )}
               >
                 <div className="mb-2 flex items-start justify-between gap-3">
@@ -104,7 +123,7 @@ export function PlanTimeline({
                     {formatTimeRange(item.time, item.endTime)}
                   </span>
                   <div className="flex items-center gap-2">
-                    {item.kind === "plan_stop" && item.aiGenerated && (
+                    {isPlanStop && item.aiGenerated && (
                       <span className="rounded-full bg-tertiary/15 px-2 py-0.5 font-montserrat text-[10px] font-semibold uppercase tracking-wider text-tertiary">
                         AI Curated
                       </span>
@@ -134,13 +153,43 @@ export function PlanTimeline({
                   <p
                     className={cn(
                       "font-montserrat text-xs leading-relaxed text-on-surface-variant",
-                      item.kind === "plan_stop" && "italic"
+                      isPlanStop && "italic"
                     )}
                   >
-                    {item.kind === "plan_stop" && (
+                    {isPlanStop && (
                       <span className="mr-1 text-primary/40">&ldquo;</span>
                     )}
                     {item.explanation}
+                  </p>
+                )}
+
+                {/* Skip button — only on AI-generated plan stops, only when
+                    onSkipStop is wired in by the parent. */}
+                {isPlanStop && onSkipStop && (
+                  <div className="mt-3 flex items-center justify-end">
+                    <button
+                      type="button"
+                      onClick={() => onSkipStop(item)}
+                      disabled={isSkipping}
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-full border border-on-surface/10 px-3 py-1 font-montserrat text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant transition-colors",
+                        !isSkipping &&
+                          "hover:border-primary/30 hover:bg-primary/5 hover:text-primary",
+                        isSkipping && "cursor-not-allowed opacity-70"
+                      )}
+                      aria-label={`Skip ${item.activity} and find an alternative`}
+                    >
+                      <span className="material-symbols-outlined text-[14px]">
+                        {isSkipping ? "progress_activity" : "refresh"}
+                      </span>
+                      {isSkipping ? "Finding..." : "Not this one"}
+                    </button>
+                  </div>
+                )}
+
+                {showSkipError && (
+                  <p className="mt-2 font-montserrat text-[11px] italic text-primary/80">
+                    {skipError.message}
                   </p>
                 )}
               </motion.div>

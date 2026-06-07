@@ -1,5 +1,8 @@
+// DROP IN AT: src/lib/types/home.ts
+
 import type { PlanGenerateResponse } from "@/lib/home/generatePlan";
 import type { VenueVibeId } from "@/lib/constants/venues";
+import type { WardrobeCategoryId } from "@/lib/constants/wardrobe";
 
 export type HomePageState = "initial" | "generating" | "generated";
 
@@ -20,9 +23,6 @@ export interface WeatherInfo {
   temperature: number;
   condition: string;
   icon: string;
-  /** Indian NAQI (data.gov.in / CPCB dataset), when available. */
-  aqi?: number | null;
-  aqiLabel?: string | null;
 }
 
 export interface TimelineItem {
@@ -40,8 +40,22 @@ export interface TimelineItem {
   aiGenerated?: boolean;
 }
 
+// One concrete garment in the outfit-of-the-day. Mirror of OutfitItemPick from
+// src/lib/ai/outfit.ts, but flattened with a display label so the UI can render
+// without reaching back into wardrobe constants.
+export interface OutfitItem {
+  category: WardrobeCategoryId;
+  photoUrl: string;
+  label: string;
+}
+
 export interface OutfitRecommendation {
+  // imageUrl is the hero / lead photo (used as the big image on the card).
+  // Kept alongside items so existing code paths reading imageUrl still work.
   imageUrl: string;
+  // Full pick in display order: core piece(s) first, then footwear, outerwear,
+  // accessory. The card renders this as a hero plus a thumbnail strip.
+  items: OutfitItem[];
   subtitle: string;
   title: string;
   explanation: string;

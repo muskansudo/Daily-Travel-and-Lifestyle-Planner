@@ -26,10 +26,7 @@
 // (typically: try once more or skip the slot).
 
 import type { RagResult } from "@/lib/types/venue";
-import {
-  overlapsAnyBusy,
-  type BusyInterval,
-} from "@/lib/calendar/events";
+import { overlapsAnyBusy, type BusyInterval } from "@/lib/calendar/events";
 import { bucketForHour } from "@/lib/constants/venues";
 
 // NOTE: Verify model name at console.groq.com/models before relying on it.
@@ -112,7 +109,7 @@ const EMPTY_PLAN: Plan = {
 export function allocateSlots(
   window: { start: Date; end: Date },
   busy: BusyInterval[],
-  maxStops: number
+  maxStops: number,
 ): TimeSlot[] {
   if (maxStops <= 0) return [];
 
@@ -135,7 +132,7 @@ export function allocateSlots(
     const dur = clampMultiple(
       Math.min(MAX_SLOT_MIN, usableMin),
       5,
-      MIN_SLOT_MIN
+      MIN_SLOT_MIN,
     );
     if (dur < MIN_SLOT_MIN) return [];
     const slotEnd = new Date(cursor.getTime() + dur * 60_000);
@@ -207,16 +204,33 @@ Use only a venueId from the provided list. Never invent.`;
  * Groq failure or parse error. The orchestrator decides what to do with null
  * (typically: skip the slot — the SRS allows partial plans).
  */
+function fallbackStop(
+  candidates: RagResult[],
+  slot: TimeSlot,
+): PlanStop | null {
+  const top = candidates[0]; // RAG returns these already sorted by score
+  if (!top) return null;
+  return {
+    venueId: top.venue.id,
+    venueName: top.venue.name,
+    category: top.venue.category,
+    neighborhood: top.venue.neighborhood,
+    startTime: slot.startTime,
+    endTime: slot.endTime,
+    whyThis: top.venue.whyThisShort,
+  };
+}
+
 export async function generatePlanForSlot(
   candidates: RagResult[],
   slot: TimeSlot,
   vibes: string[],
-  collaborative?: { friendDisplayName: string }
+  collaborative?: { friendDisplayName: string },
 ): Promise<PlanStop | null> {
   if (candidates.length === 0) return null;
 
   const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) return null;
+  if (!apiKey) return fallbackStop(candidates, slot);
 
   const timeOfDay = bucketForHour(slot.startDate);
   const userPrompt = buildSlotPrompt(
@@ -224,52 +238,55 @@ export async function generatePlanForSlot(
     vibes,
     timeOfDay,
     slot,
-    collaborative
+    collaborative,
   );
 
-  let response: Response;
-  try {
-    response = await fetch(GROQ_ENDPOINT, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: GROQ_MODEL,
-        temperature: GROQ_TEMPERATURE,
-        max_tokens: 256,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: userPrompt },
-        ],
-      }),
-    });
-  } catch {
-    return null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let response: Response;
+    try {
+      response = await fetch(GROQ_ENDPOINT, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: GROQ_MODEL,
+          temperature: GROQ_TEMPERATURE,
+          max_tokens: 256,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            { role: "user", content: userPrompt },
+          ],
+        }),
+      });
+    } catch {
+      break;
+    }
+
+    if (response.status === 429 && attempt === 0) {
+      await new Promise((r) => setTimeout(r, 1200));
+      continue;
+    }
+    if (!response.ok) break;
+
+    try {
+      const payload = (await response.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      const content = payload.choices?.[0]?.message?.content;
+      if (content) {
+        const stop = sanitiseStop(JSON.parse(content), candidates, slot);
+        if (stop) return stop;
+      }
+    } catch {
+      // fall through to fallback
+    }
+    break;
   }
 
-  if (!response.ok) return null;
-
-  let payload: { choices?: Array<{ message?: { content?: string } }> };
-  try {
-    payload = await response.json();
-  } catch {
-    return null;
-  }
-
-  const content = payload.choices?.[0]?.message?.content;
-  if (!content) return null;
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    return null;
-  }
-
-  return sanitiseStop(parsed, candidates, slot);
+  return fallbackStop(candidates, slot);
 }
 
 function buildSlotPrompt(
@@ -277,12 +294,12 @@ function buildSlotPrompt(
   vibes: string[],
   timeOfDay: string,
   slot: TimeSlot,
-  collaborative?: { friendDisplayName: string }
+  collaborative?: { friendDisplayName: string },
 ): string {
   const venueCards = candidates
     .map(
       (r) =>
-        `[${r.venue.id}] ${r.venue.name} | ${r.venue.category} | ${r.venue.neighborhood} | ${r.venue.whyThisShort}`
+        `[${r.venue.id}] ${r.venue.name} | ${r.venue.category} | ${r.venue.neighborhood} | ${r.venue.whyThisShort}`,
     )
     .join("\n");
 
@@ -303,7 +320,7 @@ Pick ONE venue id that best fits a ${timeOfDay} slot for this mood. Ground whyTh
 function sanitiseStop(
   raw: unknown,
   candidates: RagResult[],
-  slot: TimeSlot
+  slot: TimeSlot,
 ): PlanStop | null {
   if (!raw || typeof raw !== "object") return null;
   const obj = raw as Record<string, unknown>;
@@ -331,7 +348,7 @@ function sanitiseStop(
 /** One-window multi-stop plan for friends collab (no per-slot RAG). */
 export async function generatePlan(
   candidates: RagResult[],
-  context: PlanContext
+  context: PlanContext,
 ): Promise<Plan> {
   if (candidates.length === 0) return EMPTY_PLAN;
 
@@ -347,7 +364,7 @@ export async function generatePlan(
       pool,
       slot,
       context.vibes,
-      context.collaborative
+      context.collaborative,
     );
     if (!stop) continue;
     stops.push(stop);
@@ -372,5 +389,7 @@ function fmtHHMM(d: Date): string {
 
 function truncateWords(s: string, maxWords: number): string {
   const words = s.trim().split(/\s+/).filter(Boolean);
-  return words.length <= maxWords ? words.join(" ") : words.slice(0, maxWords).join(" ");
+  return words.length <= maxWords
+    ? words.join(" ")
+    : words.slice(0, maxWords).join(" ");
 }

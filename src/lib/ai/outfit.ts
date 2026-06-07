@@ -1,3 +1,5 @@
+// DROP IN AT: src/lib/ai/outfit.ts
+//
 // L3 Outfit-of-the-Day generation — Saanjh's wardrobe-to-outfit layer
 //
 // The closet sibling of src/lib/ai/plan.ts. Same three-part shape:
@@ -33,7 +35,7 @@
 //   nothing else changes.
 
 import { createAdminClient } from "@/lib/supabase/admin";
-import type { OutfitRecommendation } from "@/lib/types/home";
+import type { OutfitItem, OutfitRecommendation } from "@/lib/types/home";
 import type { WardrobeItem } from "@/lib/types/wardrobe";
 import {
   CATEGORY_LABEL,
@@ -453,12 +455,25 @@ function selectOutfitDeterministic(
 
 function composeRecommendation(selection: OutfitSelection): OutfitRecommendation {
   const hero = pickHero(selection.items);
-  const subtitleParts = selection.items
-    .map((i) => CATEGORY_LABEL[i.category] ?? i.category)
-    .slice(0, 4);
+
+  // Build the display-ready items array. The hero (if any) goes first so the
+  // card can render it large; everything else follows in selection order
+  // (footwear, outerwear, accessory tail comes from assembleValidItems).
+  const ordered = hero
+    ? [hero, ...selection.items.filter((i) => i.id !== hero.id)]
+    : selection.items;
+
+  const items: OutfitItem[] = ordered.map((i) => ({
+    category: i.category,
+    photoUrl: i.photoUrl,
+    label: CATEGORY_LABEL[i.category] ?? i.category,
+  }));
+
+  const subtitleParts = items.map((i) => i.label).slice(0, 4);
 
   return {
     imageUrl: hero?.photoUrl || DEFAULT_VIBE_IMAGE,
+    items,
     title: selection.title,
     subtitle: subtitleParts.join(" · "),
     explanation: selection.explanation,

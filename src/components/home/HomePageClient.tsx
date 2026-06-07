@@ -1,3 +1,5 @@
+// DROP IN AT: src/components/home/HomePageClient.tsx (REPLACES existing file)
+
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -8,6 +10,7 @@ import type {
   GeneratePlanFilters,
   HomePageState,
   ManualScheduleEntry,
+  TimelineItem,
   WeatherInfo,
 } from "@/lib/types/home";
 import { DEFAULT_VIBE_IMAGE } from "@/lib/constants/vibes";
@@ -17,7 +20,10 @@ import {
   countEmptyWindows,
   isNoCalendarConnected,
   isPackedDay,
+  replaceStopInResponse,
   requestPlanGeneration,
+  requestStopReplacement,
+  venueIdsInResponse,
   type PlanGenerateResponse,
 } from "@/lib/home/generatePlan";
 import {
@@ -109,6 +115,16 @@ export function HomePageClient({
   const [generateFilters] = useState<GeneratePlanFilters>({
     hoursAhead: 16,
   });
+
+  // Session-level reject list: venue ids the user has tapped "Not this one"
+  // on during this browsing session. Survives across multiple skip rounds
+  // but resets on full Regenerate or page reload.
+  const [rejectedVenueIds, setRejectedVenueIds] = useState<string[]>([]);
+  const [skippingItemId, setSkippingItemId] = useState<string | null>(null);
+  const [skipError, setSkipError] = useState<{
+    id: string;
+    message: string;
+  } | null>(null);
 
   const planResponseRef = useRef<PlanGenerateResponse | null>(null);
 
@@ -207,9 +223,110 @@ export function HomePageClient({
   const handleRegenerate = () => {
     setGeneratedPlan(null);
     planResponseRef.current = null;
+    setRejectedVenueIds([]);
+    setSkipError(null);
     clearDailyPlan();
     setPageState("initial");
   };
+
+  // ---- Skip-this-stop wiring ----
+
+  const handleSkipStop = useCallback(
+    async (item: TimelineItem) => {
+      const response = planResponseRef.current;
+      if (
+        !response ||
+        item.kind !== "plan_stop" ||
+        !item.endTime ||
+        !item.category
+      ) {
+        return;
+      }
+
+      // Find the underlying stop to grab its venueId. The TimelineItem id
+      // shape is `stop-<venueId>-<startTime>`, so we can parse it back out.
+      // We also walk windows so we can verify against authoritative data.
+      let venueId: string | null = null;
+      for (const window of response.windows) {
+        for (const stop of window.plan.stops) {
+          if (
+            stop.startTime === item.time &&
+            stop.venueName === item.activity
+          ) {
+            venueId = stop.venueId;
+            break;
+          }
+        }
+        if (venueId) break;
+      }
+      if (!venueId) return;
+
+      setSkippingItemId(item.id);
+      setSkipError(null);
+
+      try {
+        const dayWideIds = venueIdsInResponse(response);
+        const excludeVenueIds = [
+          ...new Set([...dayWideIds, ...rejectedVenueIds, venueId]),
+        ];
+
+        const result = await requestStopReplacement({
+          venueIdToReplace: venueId,
+          slot: { startTime: item.time, endTime: item.endTime },
+          excludeVenueIds,
+          vibes: response.mood?.vibes ?? [],
+          manualEntries,
+          hoursAhead: generateFilters.hoursAhead,
+          allowedNeighborhoods: generateFilters.allowedNeighborhoods,
+          allowedCategories: generateFilters.allowedCategories,
+        });
+
+        if (!result.newStop) {
+          const message =
+            result.reason === "no_alternatives"
+              ? "No other matches for this time slot."
+              : result.reason === "overlap_busy"
+                ? "Couldn't find a stop that fits around your schedule."
+                : "Couldn't refresh this stop. Try again in a moment.";
+          setSkipError({ id: item.id, message });
+          // Still track the rejection so a retry won't surface the same venue.
+          setRejectedVenueIds((prev) =>
+            prev.includes(venueId!) ? prev : [...prev, venueId!]
+          );
+          return;
+        }
+
+        // Success: swap the stop in the cached response, rebuild the
+        // GeneratedPlan, persist to localStorage.
+        const updated = replaceStopInResponse(
+          response,
+          venueId,
+          item.time,
+          result.newStop
+        );
+        planResponseRef.current = updated;
+        setGeneratedPlan(buildGeneratedPlanFromResponse(updated));
+        saveDailyPlan(updated);
+        setRejectedVenueIds((prev) =>
+          prev.includes(venueId!) ? prev : [...prev, venueId!]
+        );
+      } catch {
+        setSkipError({
+          id: item.id,
+          message: "Couldn't refresh this stop. Try again in a moment.",
+        });
+      } finally {
+        setSkippingItemId(null);
+      }
+    },
+    [
+      generateFilters.allowedCategories,
+      generateFilters.allowedNeighborhoods,
+      generateFilters.hoursAhead,
+      manualEntries,
+      rejectedVenueIds,
+    ]
+  );
 
   return (
     <AuroraBackground variant="sanctuary">
@@ -291,6 +408,9 @@ export function HomePageClient({
                         ? "Connect a calendar to see your day's rhythm"
                         : undefined
                     }
+                    onSkipStop={(item) => void handleSkipStop(item)}
+                    skippingId={skippingItemId}
+                    skipError={skipError}
                   />
                 </motion.div>
                 <motion.div variants={staggerItem}>
