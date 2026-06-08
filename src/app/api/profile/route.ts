@@ -17,6 +17,7 @@ export async function GET() {
       clerk_user_id: user.clerk_id,
       display_name: user.display_name || "",
       username: user.username || "",
+      email: user.email || null,
       avatar_url: user.profile_photo_url || null,
       bio: (user as any).bio || null,
       location: user.city || "Delhi",
@@ -44,11 +45,25 @@ export async function PATCH(request: Request) {
     const supabase = createAdminClient();
 
     const updates: Record<string, unknown> = {};
-    if (body.display_name !== undefined) updates.display_name = body.display_name;
-    if (body.username !== undefined) updates.username = body.username;
-    if (body.avatar_url !== undefined) updates.profile_photo_url = body.avatar_url;
-    if (body.bio !== undefined) updates.bio = body.bio;
-    if (body.location !== undefined) updates.city = body.location;
+    if (body.display_name !== undefined) {
+      updates.display_name = body.display_name.trim();
+    }
+    if (body.username !== undefined) {
+      const trimmed = body.username.trim();
+      updates.username = trimmed === "" ? null : trimmed.toLowerCase();
+    }
+    if (body.avatar_url !== undefined) {
+      const trimmed = body.avatar_url.trim();
+      updates.profile_photo_url = trimmed === "" ? null : trimmed;
+    }
+    if (body.bio !== undefined) {
+      const trimmed = body.bio.trim();
+      updates.bio = trimmed === "" ? null : trimmed;
+    }
+    if (body.location !== undefined) {
+      const trimmed = body.location.trim();
+      updates.city = trimmed === "" ? null : trimmed;
+    }
 
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ error: "No fields to update" }, { status: 400 });
@@ -70,6 +85,7 @@ export async function PATCH(request: Request) {
       clerk_user_id: data.clerk_id,
       display_name: data.display_name || "",
       username: data.username || "",
+      email: data.email || null,
       avatar_url: data.profile_photo_url || null,
       bio: data.bio || null,
       location: data.city || "Delhi",

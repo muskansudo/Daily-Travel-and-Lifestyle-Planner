@@ -5,6 +5,7 @@ export interface UserProfile {
   clerk_user_id: string;
   display_name: string;
   username: string;
+  email: string | null;
   avatar_url: string | null;
   bio: string | null;
   location: string | null;

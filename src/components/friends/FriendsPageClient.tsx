@@ -12,6 +12,7 @@ import { AddFriendButton } from "./AddFriendButton";
 import { AddFriendModal } from "./AddFriendModal";
 import { FriendsEmptyState } from "./FriendsEmptyState";
 import { FriendsHeader } from "./FriendsHeader";
+import { EditProfileSheet } from "@/components/profile/EditProfileSheet";
 import { CompatibilitySheet } from "./CompatibilitySheet";
 import { ExpensesSheet } from "./ExpensesSheet";
 import { FriendsList } from "./FriendsList";
@@ -25,6 +26,18 @@ export function FriendsPageClient({
   profileImageUrl?: string | null;
   weather?: WeatherInfo;
 }) {
+  const [showEditProfile, setShowEditProfile] = useState(false);
+  const [localUserName, setLocalUserName] = useState(userName);
+  const [localProfileImageUrl, setLocalProfileImageUrl] = useState(profileImageUrl);
+
+  useEffect(() => {
+    setLocalUserName(userName);
+  }, [userName]);
+
+  useEffect(() => {
+    setLocalProfileImageUrl(profileImageUrl);
+  }, [profileImageUrl]);
+
   const [friends, setFriends] = useState<FriendSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -183,9 +196,10 @@ export function FriendsPageClient({
   return (
     <AuroraBackground variant="sanctuary">
       <FriendsHeader
-        userName={userName}
+        userName={localUserName}
         weather={weather}
-        profileImageUrl={profileImageUrl}
+        profileImageUrl={localProfileImageUrl}
+        onSettingsClick={() => setShowEditProfile(true)}
       />
 
       <main className="relative z-10 mx-auto max-w-[600px] px-6 pb-32 pt-28">
@@ -260,6 +274,15 @@ export function FriendsPageClient({
         onClose={closeExpenses}
         friendId={expensesFriend?.id ?? null}
         friendDisplayName={expensesFriend?.displayName ?? null}
+      />
+
+      <EditProfileSheet
+        open={showEditProfile}
+        onClose={() => setShowEditProfile(false)}
+        onSaveSuccess={(updated) => {
+          setLocalUserName(updated.display_name);
+          setLocalProfileImageUrl(updated.avatar_url);
+        }}
       />
     </AuroraBackground>
   );

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { EditProfileSheet } from "@/components/profile/EditProfileSheet";
 import { GlassCard, SectionTitle, OverlineLabel } from "@/components/profile/GlassCard";
 import { AuroraBackground } from "@/components/ui/AuroraBackground";
 import { HomeHeader } from "@/components/home/HomeHeader";
@@ -331,52 +332,12 @@ function AddWardrobeSheet({
   );
 }
 
-// ─── EDIT PROFILE SHEET ───────────────────────────────────────────────────────
-function EditProfileSheet({
-  open,
-  onClose,
-  profile,
-  onSave,
-}: {
-  open: boolean;
-  onClose: () => void;
-  profile: UserProfile;
-  onSave: (data: Partial<UserProfile>) => void;
-}) {
-  const [form, setForm] = useState({
-    display_name: profile.display_name,
-    username: profile.username,
-    bio: profile.bio ?? "",
-    location: profile.location ?? "",
-    avatar_url: profile.avatar_url ?? "",
-  });
-
-  return (
-    <BottomSheet open={open} onClose={onClose} title="Edit Profile">
-      <div className="flex flex-col gap-4 pb-2">
-        <GlassInput label="Display Name" placeholder="Your name" value={form.display_name}
-          onChange={e => setForm(f => ({ ...f, display_name: e.target.value }))} />
-        <GlassInput label="Username" placeholder="@username" value={form.username}
-          onChange={e => setForm(f => ({ ...f, username: e.target.value }))} />
-        <GlassInput label="Bio" placeholder="A little about you…" value={form.bio}
-          onChange={e => setForm(f => ({ ...f, bio: e.target.value }))} />
-        <GlassInput label="Location" placeholder="New Delhi, India" value={form.location}
-          onChange={e => setForm(f => ({ ...f, location: e.target.value }))} />
-        <GlassInput label="Avatar URL" placeholder="https://…" value={form.avatar_url}
-          onChange={e => setForm(f => ({ ...f, avatar_url: e.target.value }))} />
-        <PillButton variant="primary" size="lg" className="w-full mt-2"
-          onClick={() => onSave(form)} disabled={!form.display_name.trim()}>
-          Save Changes
-        </PillButton>
-      </div>
-    </BottomSheet>
-  );
-}
+// Reusable EditProfileSheet is now imported from "@/components/profile/EditProfileSheet"
 
 // ─── DEMO FALLBACK DATA ───────────────────────────────────────────────────────
 const DEMO_PROFILE: UserProfile = {
   id: "demo", clerk_user_id: "demo", display_name: "Riya Sharma",
-  username: "@riya.saanjh", avatar_url: null,
+  username: "@riya.saanjh", email: "riya.sharma@saanjh.com", avatar_url: null,
   bio: "Curating everyday beauty, one plan at a time ✨",
   location: "New Delhi, India", ai_integration_enabled: true,
   created_at: "", updated_at: "",
@@ -529,18 +490,7 @@ export default function ProfilePage() {
   }, []);
 
   // ── Actions ────────────────────────────────────────────────────────────────
-  const handleSaveProfile = useCallback(async (data: Partial<UserProfile>) => {
-    setProfile(p => p ? { ...p, ...data } : p);
-    setShowEditProfile(false);
-    try {
-      await fetch("/api/profile", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
-      showToast("Profile updated ✨");
-    } catch { showToast("Saved locally"); }
-  }, [showToast]);
+  // handleSaveProfile has been replaced by the reusable EditProfileSheet internal save handler
 
   const handleAddWardrobe = useCallback(async (data: Partial<WardrobeItem>) => {
     const optimistic: WardrobeItem = {
@@ -951,14 +901,14 @@ export default function ProfilePage() {
         onClose={() => setShowAddWardrobe(false)}
         onSave={handleAddWardrobe}
       />
-      {profile && (
-        <EditProfileSheet
-          open={showEditProfile}
-          onClose={() => setShowEditProfile(false)}
-          profile={profile}
-          onSave={handleSaveProfile}
-        />
-      )}
+      <EditProfileSheet
+        open={showEditProfile}
+        onClose={() => setShowEditProfile(false)}
+        onSaveSuccess={(updated) => {
+          setProfile(updated);
+          showToast("Profile updated ✨");
+        }}
+      />
 
       {/* ── TOAST ─────────────────────────────────────────────────────── */}
       <Toast message={toast} />
