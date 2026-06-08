@@ -73,6 +73,7 @@ export interface ConnectedCalendar {
 
 // ── DIETARY TYPES ─────────────────────────────────────────────────────────────
 export interface DietaryPreference {
+  id?: string;
   label: string;
   icon: string;
   is_active: boolean;
