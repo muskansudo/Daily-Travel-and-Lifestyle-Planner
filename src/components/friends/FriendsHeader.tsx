@@ -7,16 +7,19 @@ export function FriendsHeader({
   userName,
   weather,
   profileImageUrl,
+  onSettingsClick,
 }: {
   userName: string;
   weather?: WeatherInfo | null;
   profileImageUrl?: string | null;
+  onSettingsClick?: () => void;
 }) {
   return (
     <HomeHeader
       userName={userName}
       weather={weather}
       profileImageUrl={profileImageUrl}
+      onSettingsClick={onSettingsClick}
     />
   );
 }

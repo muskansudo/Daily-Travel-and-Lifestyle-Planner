@@ -33,6 +33,7 @@ import { ManualScheduleSheet } from "./ManualScheduleSheet";
 import { GenerationSequence } from "./GenerationSequence";
 import { PlanTimeline } from "./PlanTimeline";
 import { OutfitCard } from "./OutfitCard";
+import { EditProfileSheet } from "@/components/profile/EditProfileSheet";
 import { VenueCarousel } from "./VenueCarousel";
 import { EveningReflection } from "./EveningReflection";
 import { BottomNav } from "./BottomNav";
@@ -94,6 +95,18 @@ export function HomePageClient({
   profileImageUrl?: string | null;
   weather?: WeatherInfo;
 }) {
+  const [showEditProfile, setShowEditProfile] = useState(false);
+  const [localUserName, setLocalUserName] = useState(userName);
+  const [localProfileImageUrl, setLocalProfileImageUrl] = useState(profileImageUrl);
+
+  useEffect(() => {
+    setLocalUserName(userName);
+  }, [userName]);
+
+  useEffect(() => {
+    setLocalProfileImageUrl(profileImageUrl);
+  }, [profileImageUrl]);
+
   const [pageState, setPageState] = useState<HomePageState>("initial");
   const [vibeImageUrl, setVibeImageUrl] = useState(DEFAULT_VIBE_IMAGE);
   const [vibeImageFile, setVibeImageFile] = useState<File | null>(null);
@@ -214,9 +227,10 @@ export function HomePageClient({
   return (
     <AuroraBackground variant="sanctuary">
       <HomeHeader
-        userName={userName}
+        userName={localUserName}
         weather={weather}
-        profileImageUrl={profileImageUrl}
+        profileImageUrl={localProfileImageUrl}
+        onSettingsClick={() => setShowEditProfile(true)}
       />
 
       <main className="mx-auto max-w-[600px] space-y-10 px-6 pb-40 pt-28">
@@ -330,6 +344,15 @@ export function HomePageClient({
       />
 
       <BottomNav activeTab="today" />
+
+      <EditProfileSheet
+        open={showEditProfile}
+        onClose={() => setShowEditProfile(false)}
+        onSaveSuccess={(updated) => {
+          setLocalUserName(updated.display_name);
+          setLocalProfileImageUrl(updated.avatar_url);
+        }}
+      />
     </AuroraBackground>
   );
 }
