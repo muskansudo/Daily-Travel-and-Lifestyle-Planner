@@ -41,15 +41,11 @@ export function ManualScheduleSheet({
   onSave: (entries: ManualScheduleEntry[]) => void;
   quietHours?: boolean;
 }) {
-  const [localEntries, setLocalEntries] = useState<ManualScheduleEntry[]>(
-    entries.length > 0 ? entries : [EMPTY_ENTRY()]
-  );
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [localEntries, setLocalEntries] = useState<ManualScheduleEntry[]>(entries);
 
   useEffect(() => {
     if (open) {
-      setLocalEntries(entries.length > 0 ? entries : [EMPTY_ENTRY()]);
-      setSaveError(null);
+      setLocalEntries(entries);
     }
   }, [open, entries]);
 
@@ -58,7 +54,6 @@ export function ManualScheduleSheet({
     field: keyof ManualScheduleEntry,
     value: string
   ) => {
-    setSaveError(null);
     setLocalEntries((prev) =>
       prev.map((e) => (e.id === id ? { ...e, [field]: value } : e))
     );
@@ -69,21 +64,11 @@ export function ManualScheduleSheet({
   };
 
   const removeEntry = (id: string) => {
-    setLocalEntries((prev) =>
-      prev.length <= 1 ? prev : prev.filter((e) => e.id !== id)
-    );
+    setLocalEntries((prev) => prev.filter((e) => e.id !== id));
   };
 
   const handleSave = () => {
     const valid = localEntries.filter(isValidEntry);
-
-    if (valid.length === 0) {
-      setSaveError(
-        "Add at least one commitment with a start time, end time, and activity."
-      );
-      return;
-    }
-
     onSave(valid);
     onClose();
   };
@@ -149,6 +134,12 @@ export function ManualScheduleSheet({
                 animate="visible"
                 className="space-y-4"
               >
+                {localEntries.length === 0 && (
+                  <p className="py-6 text-center font-montserrat text-sm text-on-surface-variant/70">
+                    No busy windows yet. Add one below, or save to clear your
+                    manual schedule.
+                  </p>
+                )}
                 {localEntries.map((entry) => (
                   <motion.div
                     key={entry.id}
@@ -160,17 +151,16 @@ export function ManualScheduleSheet({
                       <span className="font-montserrat text-xs font-semibold uppercase tracking-wider text-primary">
                         Busy window
                       </span>
-                      {localEntries.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => removeEntry(entry.id)}
-                          className="text-on-surface-variant/60 hover:text-error"
-                        >
-                          <span className="material-symbols-outlined text-[18px]">
-                            delete
-                          </span>
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => removeEntry(entry.id)}
+                        className="text-on-surface-variant/60 hover:text-error"
+                        aria-label="Remove busy window"
+                      >
+                        <span className="material-symbols-outlined text-[18px]">
+                          delete
+                        </span>
+                      </button>
                     </div>
                     <div className="space-y-3">
                       <div className="grid grid-cols-2 gap-3">
@@ -232,16 +222,11 @@ export function ManualScheduleSheet({
                 className="mt-4 flex w-full items-center justify-center gap-2 rounded-full border border-dashed border-primary/30 py-3 font-montserrat text-sm font-semibold text-primary hover:bg-primary/5"
               >
                 <span className="material-symbols-outlined text-[18px]">add</span>
-                Add another window
+                {localEntries.length === 0 ? "Add a window" : "Add another window"}
               </motion.button>
             </div>
 
             <div className="border-t border-white/20 px-6 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
-              {saveError && (
-                <p className="mb-3 text-center font-montserrat text-xs text-error">
-                  {saveError}
-                </p>
-              )}
               <motion.button
                 type="button"
                 onClick={handleSave}
