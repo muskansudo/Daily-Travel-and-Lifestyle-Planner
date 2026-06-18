@@ -1,8 +1,9 @@
-// DROP IN AT: src/lib/types/home.ts
+// DROP IN AT: src/lib/types/home.ts (REPLACES existing file)
 
 import type { PlanGenerateResponse } from "@/lib/home/generatePlan";
 import type { VenueVibeId } from "@/lib/constants/venues";
 import type { WardrobeCategoryId } from "@/lib/constants/wardrobe";
+import type { CardSuggestion } from "@/lib/ai/card";
 
 export type HomePageState = "initial" | "generating" | "generated";
 
@@ -88,6 +89,9 @@ export interface VenueRecommendation {
   isTopPick?: boolean;
   location: VenueLocation;
   route: VenueRouteInfo;
+  // Best card for spending at this stop. null on free / low-spend stops
+  // (park, walk, art). Populated by the mappers via suggestCardForCategory().
+  cardSuggestion?: CardSuggestion | null;
 }
 
 export interface GeneratedPlan {

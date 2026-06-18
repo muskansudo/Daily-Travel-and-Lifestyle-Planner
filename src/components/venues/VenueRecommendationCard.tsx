@@ -24,7 +24,7 @@ export function VenueRecommendationCard({
       whileTap={{ scale: 0.98 }}
       className={cn(
         "glass-panel silk-border relative flex-shrink-0 overflow-hidden rounded-2xl",
-        featured ? "w-[85vw] max-w-[340px] sm:w-[320px]" : "w-[260px]"
+        featured ? "w-[85vw] max-w-[340px] sm:w-[320px]" : "w-[260px]",
       )}
     >
       <div className="relative h-36 overflow-hidden">
@@ -72,6 +72,9 @@ export function VenueRecommendationCard({
         <p className="mt-3 font-montserrat text-xs leading-relaxed text-on-surface-variant/80">
           {venue.whyThisVenue}
         </p>
+        {venue.cardSuggestion && (
+          <p className="card-chip">💳 {venue.cardSuggestion.reason}</p>
+        )}
       </div>
     </motion.article>
   );
