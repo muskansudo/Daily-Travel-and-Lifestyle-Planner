@@ -1,3 +1,4 @@
+import { suggestCardForCategory } from "@/lib/ai/card";
 import type { PlanStop } from "@/lib/ai/plan";
 import {
   formatNeighborhood,
@@ -38,7 +39,7 @@ function eventSortKey(iso: string): number {
 }
 
 function eventToTimelineItem(
-  event: CollabSerializedCalendarEvent
+  event: CollabSerializedCalendarEvent,
 ): TimelineItem {
   const start = new Date(event.start);
   const end = new Date(event.end);
@@ -71,7 +72,7 @@ function eventToTimelineItem(
 function stopToTimelineItem(
   stop: PlanStop,
   aiGenerated: boolean,
-  faded: boolean
+  faded: boolean,
 ): TimelineItem {
   return {
     id: `stop-${stop.venueId}-${stop.startTime}`,
@@ -127,7 +128,7 @@ function sharedWindowToTimelineItem(window: CollabPlannedWindow): TimelineItem {
 
 function buildCollabTimelineInternal(
   events: CollabSerializedCalendarEvent[],
-  windows: CollabPlannedWindow[]
+  windows: CollabPlannedWindow[],
 ): TimelineItem[] {
   const items: TimelineItem[] = [];
 
@@ -155,7 +156,7 @@ function buildCollabTimelineInternal(
 }
 
 export function payloadWindowToPlanned(
-  w: SharedPlanPayloadV1["windows"][number]
+  w: SharedPlanPayloadV1["windows"][number],
 ): CollabPlannedWindow {
   return {
     freeWindow: { start: w.freeWindow.startIso, end: w.freeWindow.endIso },
@@ -169,22 +170,22 @@ export function payloadWindowToPlanned(
 }
 
 export function buildCollabTimeline(
-  response: CollabPlanGenerateResponse
+  response: CollabPlanGenerateResponse,
 ): TimelineItem[] {
   return buildCollabTimelineInternal(response.events, response.windows);
 }
 
 export function buildCollabTimelineFromPayload(
-  payload: SharedPlanPayloadV1
+  payload: SharedPlanPayloadV1,
 ): TimelineItem[] {
   return buildCollabTimelineInternal(
     payload.events,
-    payload.windows.map(payloadWindowToPlanned)
+    payload.windows.map(payloadWindowToPlanned),
   );
 }
 
 export function collabStopsToVenues(
-  windows: CollabPlannedWindow[]
+  windows: CollabPlannedWindow[],
 ): VenueRecommendation[] {
   const allStops = windows.flatMap((w) => w.plan.stops);
 
@@ -195,6 +196,9 @@ export function collabStopsToVenues(
     distance: formatNeighborhood(stop.neighborhood),
     category: stop.category,
     whyThisVenue: stop.whyThis,
+    cardSuggestion: suggestCardForCategory(stop.category, {
+      payerName: "the host",
+    }),
     isTopPick: index === 0,
     location: {
       lat: DEFAULT_BIAS_LATLNG.lat,
@@ -210,18 +214,18 @@ export function collabStopsToVenues(
 }
 
 export function countEmptyCollabWindows(
-  response: CollabPlanGenerateResponse
+  response: CollabPlanGenerateResponse,
 ): number {
   return response.windows.filter(
     (w) =>
       w.status !== "past" &&
       w.plan.stops.length === 0 &&
-      w.skippedReason !== "past"
+      w.skippedReason !== "past",
   ).length;
 }
 
 export function isNoSharedWindows(
-  response: CollabPlanGenerateResponse
+  response: CollabPlanGenerateResponse,
 ): boolean {
   return (
     response.debug.reason === "no_shared_windows" ||
@@ -230,7 +234,7 @@ export function isNoSharedWindows(
 }
 
 export function canSaveCollabPlan(
-  response: CollabPlanGenerateResponse
+  response: CollabPlanGenerateResponse,
 ): boolean {
   if (isNoSharedWindows(response)) return false;
   return response.windows.some((w) => w.plan.stops.length > 0);

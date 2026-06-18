@@ -1,5 +1,5 @@
 // DROP IN AT: src/lib/home/generatePlan.ts (REPLACES existing file)
-
+import { suggestCardForCategory } from "@/lib/ai/card";
 import type { Plan, PlanStop } from "@/lib/ai/plan";
 import type { MoodResult } from "@/lib/ai/mood";
 import type {
@@ -231,6 +231,7 @@ export function stopsToVenues(stops: PlanStop[]): VenueRecommendation[] {
     distance: formatNeighborhood(stop.neighborhood),
     category: stop.category,
     whyThisVenue: stop.whyThis,
+    cardSuggestion: suggestCardForCategory(stop.category),
     isTopPick: index === 0,
     location: {
       lat: DEFAULT_BIAS_LATLNG.lat,
