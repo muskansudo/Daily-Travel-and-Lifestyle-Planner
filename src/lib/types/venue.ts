@@ -87,6 +87,10 @@ export interface RagInputs {
   timeOfDay?: string;
   // How many candidates to return (default 8 — enough for L3 LLM to build a varied plan)
   topK?: number;
+  // Budget filter — hard cap on venue price_tier (1=under ₹500, 2=₹500-1500,
+  // 3=₹1500+). When set, only venues at or below this tier are returned.
+  // Mapped from the user's pre-generation budget selection. Undefined = no cap.
+  maxPriceTier?: number;
 }
 
 // A scored retrieval result. `score` is exposed so callers can inspect rankings

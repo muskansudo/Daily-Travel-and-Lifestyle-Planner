@@ -31,9 +31,7 @@ import {
   loadDailyPlan,
   saveDailyPlan,
 } from "@/lib/home/dailyPlanStorage";
-import {
-  isPlanningQuietHours,
-} from "@/lib/planning/quietHours";
+import { isPlanningQuietHours } from "@/lib/planning/quietHours";
 import { PlanningQuietHoursNotice } from "@/components/planning/PlanningQuietHoursNotice";
 import { AuroraBackground } from "@/components/ui/AuroraBackground";
 import { HomeHeader } from "./HomeHeader";
@@ -48,6 +46,14 @@ import { VenueCarousel } from "./VenueCarousel";
 import { EveningReflection } from "./EveningReflection";
 import { BottomNav } from "./BottomNav";
 import { staggerContainer, staggerItem } from "./animations";
+
+// ── Stage 3: agent layer UI ──────────────────────────────────────────────────
+import { AgentStatusBar } from "@/components/agent/AgentStatusBar";
+import { ReasoningTracePanel } from "@/components/agent/ReasoningTracePanel";
+import { PlanDiffDrawer } from "@/components/agent/PlanDiffDrawer";
+import { PreGenerationSheet, type EnergyLevel, type BudgetLevel } from "@/components/agent/PreGenerationSheet";
+import type { RepairResult } from "@/lib/agent/types";
+// ─────────────────────────────────────────────────────────────────────────────
 
 function PlanStatusBanner({
   response,
@@ -107,44 +113,87 @@ export function HomePageClient({
 }) {
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [localUserName, setLocalUserName] = useState(userName);
-  const [localProfileImageUrl, setLocalProfileImageUrl] = useState(profileImageUrl);
+  const [localProfileImageUrl, setLocalProfileImageUrl] =
+    useState(profileImageUrl);
 
-  useEffect(() => {
-    setLocalUserName(userName);
-  }, [userName]);
-
-  useEffect(() => {
-    setLocalProfileImageUrl(profileImageUrl);
-  }, [profileImageUrl]);
+  useEffect(() => { setLocalUserName(userName); }, [userName]);
+  useEffect(() => { setLocalProfileImageUrl(profileImageUrl); }, [profileImageUrl]);
 
   const [pageState, setPageState] = useState<HomePageState>("initial");
   const [vibeImageUrl, setVibeImageUrl] = useState(DEFAULT_VIBE_IMAGE);
   const [vibeImageFile, setVibeImageFile] = useState<File | null>(null);
   const [manualSheetOpen, setManualSheetOpen] = useState(false);
-  const [manualEntries, setManualEntries] = useState<ManualScheduleEntry[]>(
-    []
-  );
-  const [generatedPlan, setGeneratedPlan] = useState<GeneratedPlan | null>(
-    null
-  );
+  const [manualEntries, setManualEntries] = useState<ManualScheduleEntry[]>([]);
+  const [generatedPlan, setGeneratedPlan] = useState<GeneratedPlan | null>(null);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [apiReady, setApiReady] = useState(false);
-  const [generateFilters] = useState<GeneratePlanFilters>({
-    hoursAhead: 16,
-  });
-
-  // Session-level reject list: venue ids the user has tapped "Not this one"
-  // on during this browsing session. Survives across multiple skip rounds
-  // but resets on full Regenerate or page reload.
+  const [generateFilters] = useState<GeneratePlanFilters>({ hoursAhead: 16 });
   const [rejectedVenueIds, setRejectedVenueIds] = useState<string[]>([]);
   const [skippingItemId, setSkippingItemId] = useState<string | null>(null);
-  const [skipError, setSkipError] = useState<{
-    id: string;
-    message: string;
-  } | null>(null);
+  const [skipError, setSkipError] = useState<{ id: string; message: string } | null>(null);
   const [quietHours, setQuietHours] = useState(() => isPlanningQuietHours());
 
   const planResponseRef = useRef<PlanGenerateResponse | null>(null);
+
+  // ── Stage 3: agent state ──────────────────────────────────────────────────
+  // activeEventId: the disruption event currently being processed.
+  // traceOpen: whether the ReasoningTracePanel is visible.
+  // diffOpen: whether the PlanDiffDrawer is visible (after stream completes).
+  // pendingRepairedPlan: the plan returned by the stream, waiting for accept/reject.
+  // pendingRepairResult: the RepairResult from the stream, drives the diff.
+  const [activeEventId, setActiveEventId] = useState<string | null>(null);
+  const [traceOpen, setTraceOpen] = useState(false);
+  const [diffOpen, setDiffOpen] = useState(false);
+  const [pendingRepairedPlan, setPendingRepairedPlan] =
+    useState<PlanGenerateResponse | null>(null);
+  const [pendingRepairResult, setPendingRepairResult] =
+    useState<RepairResult | null>(null);
+
+  // Block 2: pre-generation context capture
+  const [preGenOpen, setPreGenOpen] = useState(false);
+
+  // Called by AgentStatusBar when a simulate button is tapped or a real
+  // monitor poll fires a disruption.
+  const handleDisruption = useCallback((eventId: string) => {
+    setActiveEventId(eventId);
+    setTraceOpen(true);
+    setDiffOpen(false);
+    setPendingRepairedPlan(null);
+    setPendingRepairResult(null);
+  }, []);
+
+  // Called by ReasoningTracePanel when the SSE stream ends with kind:"done".
+  const handleRepairComplete = useCallback(
+    (repairedPlan: PlanGenerateResponse, result: RepairResult) => {
+      setPendingRepairedPlan(repairedPlan);
+      setPendingRepairResult(result);
+      setTraceOpen(false);
+      setDiffOpen(true);
+    },
+    []
+  );
+
+  // User taps "Accept repair" — commit the repaired plan.
+  const handleAcceptRepair = useCallback(() => {
+    if (!pendingRepairedPlan) return;
+    planResponseRef.current = pendingRepairedPlan;
+    const plan = buildGeneratedPlanFromResponse(pendingRepairedPlan);
+    setGeneratedPlan(plan);
+    saveDailyPlan(pendingRepairedPlan);
+    setDiffOpen(false);
+    setPendingRepairedPlan(null);
+    setPendingRepairResult(null);
+    setActiveEventId(null);
+  }, [pendingRepairedPlan]);
+
+  // User taps "Keep original" — discard repair.
+  const handleRejectRepair = useCallback(() => {
+    setDiffOpen(false);
+    setPendingRepairedPlan(null);
+    setPendingRepairResult(null);
+    setActiveEventId(null);
+  }, []);
+  // ─────────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     const syncQuietHours = () => setQuietHours(isPlanningQuietHours());
@@ -180,43 +229,64 @@ export function HomePageClient({
     setVibeImageFile(file);
   }, []);
 
-  const handleGenerate = useCallback(async () => {
-    setPageState("generating");
-    setGenerateError(null);
-    setApiReady(false);
-    planResponseRef.current = null;
+  const handleGenerate = useCallback(
+    async (vibeTags: string[] = [], maxPriceTier?: number) => {
+      setPageState("generating");
+      setGenerateError(null);
+      setApiReady(false);
+      planResponseRef.current = null;
 
-    try {
-      const response = await requestPlanGeneration({
-        vibeImageFile,
-        manualEntries,
-        allowedNeighborhoods: generateFilters.allowedNeighborhoods,
-        allowedCategories: generateFilters.allowedCategories,
-        hoursAhead: generateFilters.hoursAhead,
-      });
+      try {
+        const response = await requestPlanGeneration({
+          selectedVibes: vibeTags,
+          vibeImageFile,
+          manualEntries,
+          allowedNeighborhoods: generateFilters.allowedNeighborhoods,
+          allowedCategories: generateFilters.allowedCategories,
+          hoursAhead: generateFilters.hoursAhead,
+          maxPriceTier,
+        });
+        planResponseRef.current = response;
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Plan generation failed";
+        setGenerateError(message);
+      } finally {
+        setApiReady(true);
+      }
+    },
+    [
+      generateFilters.allowedCategories,
+      generateFilters.allowedNeighborhoods,
+      generateFilters.hoursAhead,
+      manualEntries,
+      vibeImageFile,
+    ]
+  );
 
-      planResponseRef.current = response;
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Plan generation failed";
-      setGenerateError(message);
-    } finally {
-      setApiReady(true);
-    }
-  }, [
-    generateFilters.allowedCategories,
-    generateFilters.allowedNeighborhoods,
-    generateFilters.hoursAhead,
-    manualEntries,
-    vibeImageFile,
-  ]);
+  // Generate button opens the context sheet first. The sheet's confirm
+  // callback captures energy + budget as vibe tags, then runs generation.
+  const handleGenerateClick = useCallback(() => {
+    setPreGenOpen(true);
+  }, []);
+
+  const handlePreGenConfirm = useCallback(
+    (vibeTags: string[], _energy: EnergyLevel, budget: BudgetLevel) => {
+      setPreGenOpen(false);
+      // Budget maps to a hard price_tier cap on venue retrieval.
+      // light → tier 1 only, comfortable → tier <= 2, open → no cap.
+      const maxPriceTier =
+        budget === "light" ? 1 : budget === "comfortable" ? 2 : undefined;
+      void handleGenerate(vibeTags, maxPriceTier);
+    },
+    [handleGenerate]
+  );
 
   const handleGenerationComplete = useCallback(() => {
     if (generateError || !planResponseRef.current) {
       setPageState("initial");
       return;
     }
-
     const plan = buildGeneratedPlanFromResponse(planResponseRef.current);
     setGeneratedPlan(plan);
     saveDailyPlan(planResponseRef.current);
@@ -237,7 +307,6 @@ export function HomePageClient({
         entry.activity.trim()
     );
     setManualEntries(valid);
-
     void fetch("/api/schedule/manual", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -254,30 +323,15 @@ export function HomePageClient({
     setPageState("initial");
   };
 
-  // ---- Skip-this-stop wiring ----
-
   const handleSkipStop = useCallback(
     async (item: TimelineItem) => {
       const response = planResponseRef.current;
-      if (
-        !response ||
-        item.kind !== "plan_stop" ||
-        !item.endTime ||
-        !item.category
-      ) {
-        return;
-      }
+      if (!response || item.kind !== "plan_stop" || !item.endTime || !item.category) return;
 
-      // Find the underlying stop to grab its venueId. The TimelineItem id
-      // shape is `stop-<venueId>-<startTime>`, so we can parse it back out.
-      // We also walk windows so we can verify against authoritative data.
       let venueId: string | null = null;
       for (const window of response.windows) {
         for (const stop of window.plan.stops) {
-          if (
-            stop.startTime === item.time &&
-            stop.venueName === item.activity
-          ) {
+          if (stop.startTime === item.time && stop.venueName === item.activity) {
             venueId = stop.venueId;
             break;
           }
@@ -294,7 +348,6 @@ export function HomePageClient({
         const excludeVenueIds = Array.from(
           new Set([...dayWideIds, ...rejectedVenueIds, venueId])
         );
-
         const result = await requestStopReplacement({
           venueIdToReplace: venueId,
           slot: { startTime: item.time, endTime: item.endTime },
@@ -314,21 +367,13 @@ export function HomePageClient({
                 ? "Couldn't find a stop that fits around your schedule."
                 : "Couldn't refresh this stop. Try again in a moment.";
           setSkipError({ id: item.id, message });
-          // Still track the rejection so a retry won't surface the same venue.
           setRejectedVenueIds((prev) =>
             prev.includes(venueId!) ? prev : [...prev, venueId!]
           );
           return;
         }
 
-        // Success: swap the stop in the cached response, rebuild the
-        // GeneratedPlan, persist to localStorage.
-        const updated = replaceStopInResponse(
-          response,
-          venueId,
-          item.time,
-          result.newStop
-        );
+        const updated = replaceStopInResponse(response, venueId, item.time, result.newStop);
         planResponseRef.current = updated;
         setGeneratedPlan(buildGeneratedPlanFromResponse(updated));
         saveDailyPlan(updated);
@@ -336,10 +381,7 @@ export function HomePageClient({
           prev.includes(venueId!) ? prev : [...prev, venueId!]
         );
       } catch {
-        setSkipError({
-          id: item.id,
-          message: "Couldn't refresh this stop. Try again in a moment.",
-        });
+        setSkipError({ id: item.id, message: "Couldn't refresh this stop. Try again in a moment." });
       } finally {
         setSkippingItemId(null);
       }
@@ -371,6 +413,10 @@ export function HomePageClient({
           </div>
         )}
 
+        {/* ── Stage 3: Agent status bar (always visible, mounts the monitor hook) ── */}
+        <AgentStatusBar onDisruption={handleDisruption} />
+        {/* ──────────────────────────────────────────────────────────────────────── */}
+
         <LayoutGroup>
           <AnimatePresence mode="wait">
             {pageState === "initial" && (
@@ -388,7 +434,7 @@ export function HomePageClient({
                   onImageChange={handleImageChange}
                 />
                 <GeneratePlanCard
-                  onGenerate={() => void handleGenerate()}
+                  onGenerate={handleGenerateClick}
                   onManualSchedule={() => setManualSheetOpen(true)}
                   onViewDay={handleViewDay}
                   quietHours={quietHours}
@@ -465,9 +511,7 @@ export function HomePageClient({
                     whileTap={quietHours ? undefined : { scale: 0.98 }}
                     className="flex w-full items-center justify-center gap-2 rounded-full border border-white/60 bg-white/30 py-3.5 font-montserrat text-sm font-semibold uppercase tracking-wider text-primary backdrop-blur-md transition-colors hover:bg-white/50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    <span className="material-symbols-outlined text-[18px]">
-                      refresh
-                    </span>
+                    <span className="material-symbols-outlined text-[18px]">refresh</span>
                     Regenerate Plan
                   </motion.button>
                 </motion.div>
@@ -495,6 +539,32 @@ export function HomePageClient({
           setLocalProfileImageUrl(updated.avatar_url);
         }}
       />
+
+      {/* Block 2: pre-generation context sheet */}
+      <PreGenerationSheet
+        open={preGenOpen}
+        onClose={() => setPreGenOpen(false)}
+        onConfirm={handlePreGenConfirm}
+      />
+
+      {/* ── Stage 3: Agent overlay panels ─────────────────────────────────── */}
+      <ReasoningTracePanel
+        open={traceOpen}
+        eventId={activeEventId}
+        plan={planResponseRef.current}
+        onRepairComplete={handleRepairComplete}
+        onClose={() => setTraceOpen(false)}
+      />
+
+      <PlanDiffDrawer
+        open={diffOpen}
+        originalPlan={planResponseRef.current}
+        repairedPlan={pendingRepairedPlan}
+        result={pendingRepairResult}
+        onAccept={handleAcceptRepair}
+        onReject={handleRejectRepair}
+      />
+      {/* ──────────────────────────────────────────────────────────────────── */}
     </AuroraBackground>
   );
 }

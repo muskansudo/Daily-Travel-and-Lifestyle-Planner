@@ -163,6 +163,25 @@ export function PlanTimeline({
                   </p>
                 )}
 
+                {/* Block 3: credit-card suggestion chip. Only on spend stops
+                    (cafe, restaurant, bar, entertainment, bookstore, wellness);
+                    null for parks/walks so no chip renders. Category-matched
+                    from a curated catalog — never a hallucinated rate. */}
+                {isPlanStop && item.cardSuggestion && (
+                  <div className="mt-2.5 flex items-start gap-1.5 rounded-xl bg-primary/5 px-3 py-2">
+                    <span className="material-symbols-outlined text-[15px] text-primary/70 mt-px">
+                      credit_card
+                    </span>
+                    <p className="font-montserrat text-[11px] leading-snug text-on-surface-variant">
+                      <span className="font-semibold text-on-surface">
+                        {item.cardSuggestion.cardName}
+                      </span>
+                      {" — "}
+                      {item.cardSuggestion.rewardLabel}
+                    </p>
+                  </div>
+                )}
+
                 {/* Skip button — only on AI-generated plan stops, only when
                     onSkipStop is wired in by the parent. */}
                 {isPlanStop && onSkipStop && (

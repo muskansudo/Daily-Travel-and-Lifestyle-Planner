@@ -46,6 +46,7 @@ import {
 } from "@/lib/planning/quietHours";
 import { extractMoodFromImage, type MoodResult } from "@/lib/ai/mood";
 import { retrieveVenues } from "@/lib/ai/rag";
+import { getSkippedVenueIds } from "@/lib/ai/signals";
 import {
   allocateSlots,
   generatePlanForSlot,
@@ -91,6 +92,7 @@ interface OrchestratorOptions {
   allowedCategories?: string[];
   hoursAhead?: number;
   vibes?: string[];
+  maxPriceTier?: number;
   manualEntries?: Array<{
     id: string;
     startTime: string;
@@ -203,6 +205,17 @@ export async function POST(request: Request) {
     // Day-wide state
     const usedCategories: string[] = []; // for diversity exclusion
     const usedVenueIds = new Set<string>(); // for venue dedupe across slots
+
+    // Block 4: behavioral learning. Seed the dedupe set with venues this user
+    // has skipped in the past, so retrieval excludes them from generation. This
+    // is the demo's hard-exclude: a venue you rejected does not come back. The
+    // existing usedVenueIds filter (and its topK over-fetch) handle exclusion
+    // with no new logic. Scoped to the authenticated user's internal id.
+    // Best-effort: getSkippedVenueIds returns [] on error, so a signals failure
+    // never blocks generation.
+    const skippedVenueIds = await getSkippedVenueIds(user.id);
+    for (const id of skippedVenueIds) usedVenueIds.add(id);
+
     let stopsBudget = MAX_TOTAL_STOPS;
     const planned: PlannedWindow[] = [];
 
@@ -247,6 +260,7 @@ export async function POST(request: Request) {
           biasLng: biasPoint.lng,
           allowedCategories: options.allowedCategories,
           allowedNeighborhoods: options.allowedNeighborhoods,
+          maxPriceTier: options.maxPriceTier,
           excludeCategories,
           timeOfDay: bucketForHour(slot.startDate),
           topK: RAG_TOP_K + usedVenueIds.size,
@@ -350,6 +364,7 @@ async function parseRequest(request: Request): Promise<OrchestratorOptions> {
       allowedCategories: parseJsonField(formData.get("allowedCategories")),
       hoursAhead: parseNumberField(formData.get("hoursAhead")),
       vibes: parseJsonField(formData.get("vibes")),
+      maxPriceTier: parseNumberField(formData.get("maxPriceTier")),
       manualEntries: parseManualEntriesField(formData.get("manualEntries")),
       imageBuffer,
       imageMimeType,
@@ -379,6 +394,12 @@ async function parseRequest(request: Request): Promise<OrchestratorOptions> {
     vibes: Array.isArray(body.vibes)
       ? (body.vibes as string[]).filter((s) => typeof s === "string")
       : undefined,
+    maxPriceTier:
+      typeof body.maxPriceTier === "number" &&
+      body.maxPriceTier >= 1 &&
+      body.maxPriceTier <= 3
+        ? body.maxPriceTier
+        : undefined,
     manualEntries: parseManualEntries(body.manualEntries),
   };
 }
