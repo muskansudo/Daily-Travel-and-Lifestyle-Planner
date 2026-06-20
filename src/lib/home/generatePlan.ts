@@ -55,6 +55,7 @@ export interface GeneratePlanRequestOptions {
   allowedNeighborhoods?: string[];
   allowedCategories?: string[];
   hoursAhead?: number;
+  maxPriceTier?: number;
 }
 
 // ---- Skip-this-stop replacement contract ----
@@ -168,6 +169,7 @@ function stopToTimelineItem(
     neighborhood: formatNeighborhood(stop.neighborhood),
     category: stop.category,
     aiGenerated,
+    cardSuggestion: suggestCardForCategory(stop.category),
   };
 }
 
@@ -277,6 +279,7 @@ export async function requestPlanGeneration(
     allowedNeighborhoods,
     allowedCategories,
     hoursAhead = 16,
+    maxPriceTier,
   } = options;
 
   let response: Response;
@@ -304,6 +307,9 @@ export async function requestPlanGeneration(
       );
     }
     formData.append("hoursAhead", String(hoursAhead));
+    if (typeof maxPriceTier === "number") {
+      formData.append("maxPriceTier", String(maxPriceTier));
+    }
 
     response = await fetch("/api/plan/generate", {
       method: "POST",
@@ -323,6 +329,9 @@ export async function requestPlanGeneration(
     }
     if (allowedCategories?.length) {
       body.allowedCategories = allowedCategories;
+    }
+    if (typeof maxPriceTier === "number") {
+      body.maxPriceTier = maxPriceTier;
     }
 
     response = await fetch("/api/plan/generate", {

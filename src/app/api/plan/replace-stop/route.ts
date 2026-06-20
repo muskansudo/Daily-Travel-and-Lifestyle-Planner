@@ -42,6 +42,7 @@ import {
   planningQuietHoursPayload,
 } from "@/lib/planning/quietHours";
 import { retrieveVenues } from "@/lib/ai/rag";
+import { recordVenueSignal } from "@/lib/ai/signals";
 import {
   generatePlanForSlot,
   type PlanStop,
@@ -106,6 +107,15 @@ export async function POST(request: Request) {
 
   try {
     const user = await getOrCreateDbUser(clerkId);
+
+    // Block 4: persist the skip as a behavioral signal. The user rejected this
+    // venue — record it so future generations can exclude it. Scoped to the
+    // authenticated user's internal id (never client-supplied). Best-effort:
+    // recordVenueSignal swallows errors so a signal-write failure never blocks
+    // the replacement the user asked for.
+    if (body.venueIdToReplace) {
+      await recordVenueSignal(user.id, body.venueIdToReplace, "skipped");
+    }
 
     // Reconstruct the slot as real Date objects in IST. Replace operations
     // always target the current IST day — same assumption as the rest of the

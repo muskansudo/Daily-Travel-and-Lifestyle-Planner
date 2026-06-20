@@ -39,6 +39,9 @@ export interface TimelineItem {
   neighborhood?: string;
   category?: string;
   aiGenerated?: boolean;
+  // Block 3: best card for this stop's spend type. Null for non-spend stops
+  // (park, walk) and manual entries. Populated by the timeline mapper.
+  cardSuggestion?: CardSuggestion | null;
 }
 
 // One concrete garment in the outfit-of-the-day. Mirror of OutfitItemPick from

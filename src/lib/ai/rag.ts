@@ -166,6 +166,13 @@ async function fetchAndScore(
     query = query.in("neighborhood", inputs.allowedNeighborhoods);
   }
 
+  // Budget filter — hard cap on price_tier. A "light budget" user (tier 1)
+  // never sees a ₹₹₹ venue. This is a real SQL filter on the price_tier
+  // column, not a vibe nudge.
+  if (typeof inputs.maxPriceTier === "number") {
+    query = query.lte("price_tier", inputs.maxPriceTier);
+  }
+
   // Time-of-day filter — overlap on the time_of_day_fit array.
   if (opts.buckets && opts.buckets.length > 0) {
     query = query.overlaps("time_of_day_fit", opts.buckets);
