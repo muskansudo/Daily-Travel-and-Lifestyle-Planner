@@ -202,17 +202,18 @@ function classifyAqi(
   return affected;
 }
 
-// ─── Rule 3: calendar cancel ───────────────────────────────────────────────
+// ─── Rule 3: freed time (calendar cancel / work ended early / plans changed) ─
 //
-// When a meeting is canceled, the stop(s) whose window overlapped that meeting
-// don't need replacing — they need the freed time. We mark the FIRST stop
-// after the freed slot as a salvage candidate (its window can now expand) and,
-// if a stop literally overlapped the (now-gone) meeting, we surface that too.
+// When a block of time frees up — a meeting canceled, work finishing early, an
+// appointment moved — the stop(s) whose window overlapped that freed slot don't
+// need replacing; they need the extra time. We mark them as salvage candidates
+// (their windows can now expand).
 //
-// Design choice: a cancel is an OPPORTUNITY, not a breakage. The repair engine
-// treats salvage-from-cancel as "the day got freer, see if a stop can grow or
-// a new stop fits". We don't auto-insert a new venue here — that's the repair
-// engine's job, and it's gated so the demo stays predictable.
+// Design choice: freed time is an OPPORTUNITY, not a breakage. The repair engine
+// treats salvage as "the day got freer, see if a stop can grow or a new stop
+// fits". We don't auto-insert a new venue here — that's the repair engine's job,
+// and it's gated so the demo stays predictable. The payload carries an arbitrary
+// freed time window; it is not specific to meetings.
 
 function classifyCalendarCancel(
   canceledSlot: TimeWindow,
@@ -224,7 +225,7 @@ function classifyCalendarCancel(
     affected.push({
       stopIndex: fs.stopIndex,
       venueId: fs.stop.venueId,
-      reason: `${fs.stop.venueName} sat next to a meeting that was just canceled; its ${fmt(fs.window)} window can now expand`,
+      reason: `${fs.stop.venueName} sat next to a block of time that just freed up; its ${fmt(fs.window)} window can now expand`,
       severity: "minor",
       suggestedAction: "salvage",
     });

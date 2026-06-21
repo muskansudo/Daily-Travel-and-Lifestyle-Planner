@@ -43,6 +43,7 @@ import { getOrCreateDbUser, requireAuth } from "@/lib/auth";
 import {
   isPlanningQuietHours,
   planningQuietHoursPayload,
+  hoursUntilDayEnd,
 } from "@/lib/planning/quietHours";
 import { extractMoodFromImage, type MoodResult } from "@/lib/ai/mood";
 import { retrieveVenues } from "@/lib/ai/rag";
@@ -135,7 +136,13 @@ export async function POST(request: Request) {
     // Manual wins. If the user entered ANY manual events, ignore Google
     // Calendar entirely. Predictable for demo, eliminates surprise calls
     // showing up on the timeline.
-    const hoursAhead = options.hoursAhead ?? DEFAULT_HOURS_AHEAD;
+    // Cap the planning horizon at the end of the current day (midnight IST),
+    // so a late-evening generation plans only the rest of today rather than
+    // rolling a flat 16 hours into tomorrow morning. Whichever is sooner wins:
+    // the rolling cap, or end-of-day. Early-morning generations are unaffected
+    // (16h is sooner than midnight when you generate before ~8 AM).
+    const requestedHoursAhead = options.hoursAhead ?? DEFAULT_HOURS_AHEAD;
+    const hoursAhead = Math.min(requestedHoursAhead, hoursUntilDayEnd());
     const manualEvents = manualEntriesToEvents(options.manualEntries ?? []);
     const calendarEvents =
       manualEvents.length > 0

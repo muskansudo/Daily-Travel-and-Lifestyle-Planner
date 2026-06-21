@@ -64,7 +64,12 @@ export function ManualScheduleSheet({
   };
 
   const removeEntry = (id: string) => {
-    setLocalEntries((prev) => prev.filter((e) => e.id !== id));
+    const next = localEntries.filter((e) => e.id !== id);
+    setLocalEntries(next);
+    // Persist immediately so the saved count always reflects what's on screen.
+    // Without this, deleting a window then closing via the X (which doesn't
+    // save) leaves a stale "1 manual commitment saved" on the home screen.
+    onSave(next.filter(isValidEntry));
   };
 
   const handleSave = () => {

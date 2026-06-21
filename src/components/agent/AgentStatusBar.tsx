@@ -32,7 +32,7 @@ const SIMULATE_BUTTONS: {
   { type: "aqi_spike", label: "AQI Spike", icon: "air" },
   { type: "rain", label: "Rain", icon: "rainy" },
   { type: "heat_alert", label: "Heat Alert", icon: "thermometer" },
-  { type: "calendar_cancel", label: "Meeting Cancel", icon: "event_busy" },
+  { type: "calendar_cancel", label: "Plans Freed", icon: "event_available" },
   { type: "location_change", label: "Location Change", icon: "location_on" },
 ];
 
@@ -65,7 +65,7 @@ const SIMULATE_PAYLOADS: Record<SimulateType, object> = {
   calendar_cancel: {
     type: "calendar_cancel",
     eventId: "demo-event-1",
-    eventTitle: "Team standup",
+    eventTitle: "Work block ended early",
     originalSlot: {
       start: new Date().toISOString(),
       end: new Date(Date.now() + 60 * 60 * 1000).toISOString(),

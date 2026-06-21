@@ -24,6 +24,9 @@ export interface WeatherInfo {
   temperature: number;
   condition: string;
   icon: string;
+  // AQI from the India AQI source; null when unavailable. Read by HomeHeader.
+  aqi?: number | null;
+  aqiLabel?: string | null;
 }
 
 export interface TimelineItem {
