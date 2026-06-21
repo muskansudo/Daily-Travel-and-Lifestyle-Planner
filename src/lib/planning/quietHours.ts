@@ -55,3 +55,37 @@ export function formatPlanningOpensAt(date: Date): string {
     hour12: true,
   }).format(date);
 }
+
+/**
+ * Hours remaining until the end of the current planning day (midnight IST).
+ *
+ * The plan must never spill into the next calendar day. Generating at 7 PM
+ * should plan 7 PM → midnight, not roll a flat 16 hours into tomorrow morning.
+ * Callers take min(hoursAhead, hoursUntilDayEnd) so the horizon is whichever
+ * is sooner: the rolling cap, or the end of today.
+ *
+ * Returns a small positive floor (0.5h) if called very close to midnight so a
+ * late generation still yields a non-empty window rather than zero.
+ */
+export function hoursUntilDayEnd(now = new Date()): number {
+  // Next midnight IST = start of tomorrow in IST.
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: IST_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+
+  const year = parts.find((p) => p.type === "year")?.value ?? "1970";
+  const month = parts.find((p) => p.type === "month")?.value ?? "01";
+  const day = parts.find((p) => p.type === "day")?.value ?? "01";
+
+  // Midnight IST that ends TODAY = 00:00 of the day after `now`'s IST date.
+  const todayMidnightIST = new Date(`${year}-${month}-${day}T00:00:00+05:30`);
+  const nextMidnightIST = new Date(
+    todayMidnightIST.getTime() + 24 * 3600 * 1000,
+  );
+
+  const hours = (nextMidnightIST.getTime() - now.getTime()) / 3600000;
+  return Math.max(0.5, hours);
+}

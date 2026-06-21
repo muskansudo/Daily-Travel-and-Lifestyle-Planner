@@ -1,15 +1,14 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { VenueRecommendation } from "@/lib/types/home";
 import {
   backdropVariants,
   sheetVariants,
 } from "./animations";
-import {
-  ShadedRoutePreview,
-  shouldUseShadedPreview,
-} from "./ShadedRoutePreview";
+import { ShadeRouteMap } from "./ShadeRouteMap";
+import { DEFAULT_BIAS_LATLNG } from "@/lib/constants/venues";
 
 const TRANSPORT_LABELS = {
   walking: { label: "Walking", icon: "directions_walk" },
@@ -54,6 +53,17 @@ export function VenueRouteSheet({
   open: boolean;
   onClose: () => void;
 }) {
+  // When the shade API reports the venue is outside the precomputed graph,
+  // we fall back to the plain Google Maps embed instead of the shade map.
+  const [shadeUnavailable, setShadeUnavailable] = useState(false);
+
+  // Reset the fallback whenever the venue changes, so a new venue gets a fresh
+  // shot at the shade map.
+  const venueId = venue?.id ?? null;
+  useEffect(() => {
+    setShadeUnavailable(false);
+  }, [venueId]);
+
   if (!venue) return null;
 
   const transport = TRANSPORT_LABELS[venue.route.transportMode];
@@ -118,13 +128,34 @@ export function VenueRouteSheet({
             </div>
 
             <div className="no-scrollbar max-h-[calc(90dvh-180px)] overflow-y-auto px-6 pb-[max(1rem,env(safe-area-inset-bottom))]">
-              {/* Byrasandra Lake gets the custom shade-aware preview (Round 2
-                  demo route — see ShadedRoutePreview.tsx for scope notes).
-                  All other venues fall back to the keyless Google Maps embed. */}
-              {shouldUseShadedPreview(venue.name) ? (
-                <ShadedRoutePreview venueName={venue.name} />
-              ) : (
+              {/* Bagmane / ORR venues get the real shade-aware Mapbox route
+                  (graph precomputed by scripts/build-shade-graph.ts, served
+                  by /api/route/shaded). Venues outside the covered bbox fall
+                  back to the keyless Google Maps embed — we don't pretend
+                  coverage exists where it doesn't. */}
+              {/* Every venue card currently carries DEFAULT_BIAS_LATLNG as its
+                  location (the home plan stamps the bias point on all stops),
+                  so we can't gate on venue.location coords — they're all the
+                  same point. Instead we pass the venue id and let
+                  /api/route/shaded resolve the real coordinates from the
+                  venues table. The route endpoint returns graph_unavailable
+                  for venues outside the Bagmane/ORR shade graph (e.g.
+                  Whitefield, Koramangala); for those we swap in the plain
+                  Google Maps embed rather than drawing a misleading shaded
+                  route to the graph boundary. */}
+              {shadeUnavailable ? (
                 <RouteMapPreview embedUrl={embedUrl} venueName={venue.name} />
+              ) : (
+                <ShadeRouteMap
+                  origin={DEFAULT_BIAS_LATLNG}
+                  destination={{
+                    lat: venue.location.lat,
+                    lng: venue.location.lng,
+                  }}
+                  venueName={venue.name}
+                  venueId={venue.id}
+                  onGraphUnavailable={() => setShadeUnavailable(true)}
+                />
               )}
 
               {/* Mode is a real value (passed through to Google Maps). ETA,
