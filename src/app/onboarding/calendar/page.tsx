@@ -188,13 +188,59 @@ function CalendarOnboardingContent() {
       return;
     }
 
-    // If the user closes the popup without finishing, reset the button.
-    const interval = setInterval(() => {
-      if (popup && popup.closed) {
-        clearInterval(interval);
+    // Google's security headers can sever window.opener, so we don't rely on
+    // the popup messaging us. Instead the MAIN tab (session intact) polls the
+    // server for connection status — all same-origin, can't be broken by Google.
+    let settled = false;
+
+    const finish = (connected: boolean, email?: string | null) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(pollTimer);
+      clearInterval(closeTimer);
+      clearTimeout(giveUpTimer);
+      if (popup && !popup.closed) popup.close();
+      if (connected) {
+        setStatus("success");
+        if (email) setGoogleEmail(email);
+        setTimeout(() => router.push("/onboarding/wardrobe"), 1000);
+      } else {
         setStatus((s) => (s === "connecting" ? "idle" : s));
       }
+    };
+
+    const checkConnected = async (): Promise<boolean> => {
+      try {
+        const r = await fetch("/api/onboarding/calendar", { cache: "no-store" });
+        if (r.ok) {
+          const d = await r.json();
+          if (d.calendarConnected) {
+            finish(true, d.googleEmail);
+            return true;
+          }
+        }
+      } catch {
+        /* ignore transient errors and keep polling */
+      }
+      return false;
+    };
+
+    const pollTimer = setInterval(checkConnected, 1500);
+
+    // If the user closes the popup, do one final check shortly after
+    // (token write may still be landing), then stop.
+    const closeTimer = setInterval(() => {
+      if (popup && popup.closed) {
+        clearInterval(closeTimer);
+        setTimeout(async () => {
+          const ok = await checkConnected();
+          if (!ok) finish(false);
+        }, 1800);
+      }
     }, 600);
+
+    // Safety net: stop everything after 2 minutes.
+    const giveUpTimer = setTimeout(() => finish(false), 120000);
   };
 
   const handleSkip = useCallback(async () => {
