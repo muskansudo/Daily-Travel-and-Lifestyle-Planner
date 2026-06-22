@@ -119,11 +119,82 @@ function CalendarOnboardingContent() {
       .finally(() => setInitialLoading(false));
   }, [router]);
 
-  const handleGoogleConnect = () => {
+  useEffect(() => {
+    let redirectTimer: ReturnType<typeof setTimeout> | undefined;
+
+    function onMessage(event: MessageEvent) {
+      if (event.origin !== window.location.origin) return;
+      const data = event.data as
+        | { source?: string; status?: string; email?: string; reason?: string }
+        | undefined;
+      if (!data || data.source !== "saanjh-gcal") return;
+
+      if (data.status === "success") {
+        setStatus("success");
+        if (data.email) setGoogleEmail(data.email);
+        redirectTimer = setTimeout(() => {
+          router.push("/onboarding/wardrobe");
+        }, 1200);
+      } else if (data.status === "error") {
+        setStatus("error");
+        const key = data.reason ?? "unknownerror";
+        setError(
+          GOOGLE_ERROR_MESSAGES[key] ??
+            "Google Authentication failed. Please try again."
+        );
+      }
+    }
+
+    window.addEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("message", onMessage);
+      if (redirectTimer) clearTimeout(redirectTimer);
+    };
+  }, [router]);
+
+  const handleGoogleConnect = async () => {
     if (status === "connecting" || status === "success") return;
     setStatus("connecting");
     setError(null);
-    window.location.href = "/api/auth/google/initiate?redirect=1";
+
+    // Open the popup synchronously (before any await) so the browser
+    // treats it as user-initiated and doesn't block it.
+    const width = 500;
+    const height = 650;
+    const left = window.screenX + (window.outerWidth - width) / 2;
+    const top = window.screenY + (window.outerHeight - height) / 2;
+    const popup = window.open(
+      "about:blank",
+      "saanjh-google-oauth",
+      `width=${width},height=${height},left=${left},top=${top}`
+    );
+
+    try {
+      const res = await fetch("/api/auth/google/initiate");
+      const data = res.ok ? await res.json() : null;
+      if (!data?.url) throw new Error("init_failed");
+
+      if (popup) {
+        popup.location.href = data.url;
+      } else {
+        // Popup blocked — fall back to the old full-page redirect flow.
+        window.location.href = "/api/auth/google/initiate?redirect=1";
+        return;
+      }
+    } catch {
+      if (popup) popup.close();
+      setStatus("error");
+      setError("Could not start Google sign-in. Please try again.");
+      return;
+    }
+
+    // If the user closes the popup without finishing, reset the button.
+    const interval = setInterval(() => {
+      if (popup && popup.closed) {
+        clearInterval(interval);
+        setStatus((s) => (s === "connecting" ? "idle" : s));
+      }
+    }, 600);
   };
 
   const handleSkip = useCallback(async () => {

@@ -10,6 +10,7 @@ const isPublicRoute = createRouteMatcher([
   "/setup",
   "/api/webhooks(.*)",
   "/api/auth/google/callback",
+  "/oauth/google/complete",
 ]);
 
 const clerkHandler = clerkMiddleware(async (auth, request) => {

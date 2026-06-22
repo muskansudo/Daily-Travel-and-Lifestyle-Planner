@@ -16,7 +16,7 @@ export function calendarOAuthReturnUrl(
   request: NextRequest,
   params: Record<string, string>
 ) {
-  const url = new URL("/onboarding/calendar", request.url);
+  const url = new URL("/oauth/google/complete", request.url);
   for (const [key, value] of Object.entries(params)) {
     if (value) url.searchParams.set(key, value);
   }
