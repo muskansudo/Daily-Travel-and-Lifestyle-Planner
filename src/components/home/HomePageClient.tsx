@@ -43,7 +43,6 @@ import { PlanTimeline } from "./PlanTimeline";
 import { OutfitCard } from "./OutfitCard";
 import { EditProfileSheet } from "@/components/profile/EditProfileSheet";
 import { VenueCarousel } from "./VenueCarousel";
-import { EveningReflection } from "./EveningReflection";
 import { BottomNav } from "./BottomNav";
 import { staggerContainer, staggerItem } from "./animations";
 
@@ -51,15 +50,15 @@ import { staggerContainer, staggerItem } from "./animations";
 import { AgentStatusBar } from "@/components/agent/AgentStatusBar";
 import { ReasoningTracePanel } from "@/components/agent/ReasoningTracePanel";
 import { PlanDiffDrawer } from "@/components/agent/PlanDiffDrawer";
-import { PreGenerationSheet, type EnergyLevel, type BudgetLevel } from "@/components/agent/PreGenerationSheet";
+import {
+  PreGenerationSheet,
+  type EnergyLevel,
+  type BudgetLevel,
+} from "@/components/agent/PreGenerationSheet";
 import type { RepairResult } from "@/lib/agent/types";
 // ─────────────────────────────────────────────────────────────────────────────
 
-function PlanStatusBanner({
-  response,
-}: {
-  response: PlanGenerateResponse;
-}) {
+function PlanStatusBanner({ response }: { response: PlanGenerateResponse }) {
   if (isNoCalendarConnected(response)) {
     return (
       <div className="glass-panel silk-border rounded-2xl p-6 text-center">
@@ -116,21 +115,30 @@ export function HomePageClient({
   const [localProfileImageUrl, setLocalProfileImageUrl] =
     useState(profileImageUrl);
 
-  useEffect(() => { setLocalUserName(userName); }, [userName]);
-  useEffect(() => { setLocalProfileImageUrl(profileImageUrl); }, [profileImageUrl]);
+  useEffect(() => {
+    setLocalUserName(userName);
+  }, [userName]);
+  useEffect(() => {
+    setLocalProfileImageUrl(profileImageUrl);
+  }, [profileImageUrl]);
 
   const [pageState, setPageState] = useState<HomePageState>("initial");
   const [vibeImageUrl, setVibeImageUrl] = useState(DEFAULT_VIBE_IMAGE);
   const [vibeImageFile, setVibeImageFile] = useState<File | null>(null);
   const [manualSheetOpen, setManualSheetOpen] = useState(false);
   const [manualEntries, setManualEntries] = useState<ManualScheduleEntry[]>([]);
-  const [generatedPlan, setGeneratedPlan] = useState<GeneratedPlan | null>(null);
+  const [generatedPlan, setGeneratedPlan] = useState<GeneratedPlan | null>(
+    null,
+  );
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [apiReady, setApiReady] = useState(false);
   const [generateFilters] = useState<GeneratePlanFilters>({ hoursAhead: 16 });
   const [rejectedVenueIds, setRejectedVenueIds] = useState<string[]>([]);
   const [skippingItemId, setSkippingItemId] = useState<string | null>(null);
-  const [skipError, setSkipError] = useState<{ id: string; message: string } | null>(null);
+  const [skipError, setSkipError] = useState<{
+    id: string;
+    message: string;
+  } | null>(null);
   const [quietHours, setQuietHours] = useState(() => isPlanningQuietHours());
 
   const planResponseRef = useRef<PlanGenerateResponse | null>(null);
@@ -170,7 +178,7 @@ export function HomePageClient({
       setTraceOpen(false);
       setDiffOpen(true);
     },
-    []
+    [],
   );
 
   // User taps "Accept repair" — commit the repaired plan.
@@ -261,7 +269,7 @@ export function HomePageClient({
       generateFilters.hoursAhead,
       manualEntries,
       vibeImageFile,
-    ]
+    ],
   );
 
   // Generate button opens the context sheet first. The sheet's confirm
@@ -279,7 +287,7 @@ export function HomePageClient({
         budget === "light" ? 1 : budget === "comfortable" ? 2 : undefined;
       void handleGenerate(vibeTags, maxPriceTier);
     },
-    [handleGenerate]
+    [handleGenerate],
   );
 
   const handleGenerationComplete = useCallback(() => {
@@ -304,7 +312,7 @@ export function HomePageClient({
         entry.startTime &&
         entry.endTime &&
         entry.startTime !== entry.endTime &&
-        entry.activity.trim()
+        entry.activity.trim(),
     );
     setManualEntries(valid);
     void fetch("/api/schedule/manual", {
@@ -326,12 +334,21 @@ export function HomePageClient({
   const handleSkipStop = useCallback(
     async (item: TimelineItem) => {
       const response = planResponseRef.current;
-      if (!response || item.kind !== "plan_stop" || !item.endTime || !item.category) return;
+      if (
+        !response ||
+        item.kind !== "plan_stop" ||
+        !item.endTime ||
+        !item.category
+      )
+        return;
 
       let venueId: string | null = null;
       for (const window of response.windows) {
         for (const stop of window.plan.stops) {
-          if (stop.startTime === item.time && stop.venueName === item.activity) {
+          if (
+            stop.startTime === item.time &&
+            stop.venueName === item.activity
+          ) {
             venueId = stop.venueId;
             break;
           }
@@ -346,7 +363,7 @@ export function HomePageClient({
       try {
         const dayWideIds = venueIdsInResponse(response);
         const excludeVenueIds = Array.from(
-          new Set([...dayWideIds, ...rejectedVenueIds, venueId])
+          new Set([...dayWideIds, ...rejectedVenueIds, venueId]),
         );
         const result = await requestStopReplacement({
           venueIdToReplace: venueId,
@@ -368,20 +385,28 @@ export function HomePageClient({
                 : "Couldn't refresh this stop. Try again in a moment.";
           setSkipError({ id: item.id, message });
           setRejectedVenueIds((prev) =>
-            prev.includes(venueId!) ? prev : [...prev, venueId!]
+            prev.includes(venueId!) ? prev : [...prev, venueId!],
           );
           return;
         }
 
-        const updated = replaceStopInResponse(response, venueId, item.time, result.newStop);
+        const updated = replaceStopInResponse(
+          response,
+          venueId,
+          item.time,
+          result.newStop,
+        );
         planResponseRef.current = updated;
         setGeneratedPlan(buildGeneratedPlanFromResponse(updated));
         saveDailyPlan(updated);
         setRejectedVenueIds((prev) =>
-          prev.includes(venueId!) ? prev : [...prev, venueId!]
+          prev.includes(venueId!) ? prev : [...prev, venueId!],
         );
       } catch {
-        setSkipError({ id: item.id, message: "Couldn't refresh this stop. Try again in a moment." });
+        setSkipError({
+          id: item.id,
+          message: "Couldn't refresh this stop. Try again in a moment.",
+        });
       } finally {
         setSkippingItemId(null);
       }
@@ -392,7 +417,7 @@ export function HomePageClient({
       generateFilters.hoursAhead,
       manualEntries,
       rejectedVenueIds,
-    ]
+    ],
   );
 
   return (
@@ -482,7 +507,9 @@ export function HomePageClient({
                         : undefined
                     }
                     onSkipStop={
-                      quietHours ? undefined : (item) => void handleSkipStop(item)
+                      quietHours
+                        ? undefined
+                        : (item) => void handleSkipStop(item)
                     }
                     skippingId={skippingItemId}
                     skipError={skipError}
@@ -494,9 +521,7 @@ export function HomePageClient({
                 <motion.div variants={staggerItem}>
                   <VenueCarousel venues={generatedPlan.venues} />
                 </motion.div>
-                <motion.div variants={staggerItem}>
-                  <EveningReflection />
-                </motion.div>
+
                 {quietHours && (
                   <motion.div variants={staggerItem}>
                     <PlanningQuietHoursNotice />
@@ -511,7 +536,9 @@ export function HomePageClient({
                     whileTap={quietHours ? undefined : { scale: 0.98 }}
                     className="flex w-full items-center justify-center gap-2 rounded-full border border-white/60 bg-white/30 py-3.5 font-montserrat text-sm font-semibold uppercase tracking-wider text-primary backdrop-blur-md transition-colors hover:bg-white/50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    <span className="material-symbols-outlined text-[18px]">refresh</span>
+                    <span className="material-symbols-outlined text-[18px]">
+                      refresh
+                    </span>
                     Regenerate Plan
                   </motion.button>
                 </motion.div>
