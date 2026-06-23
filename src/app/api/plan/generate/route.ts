@@ -43,7 +43,6 @@ import { getOrCreateDbUser, requireAuth } from "@/lib/auth";
 import {
   isPlanningQuietHours,
   planningQuietHoursPayload,
-  hoursUntilDayEnd,
 } from "@/lib/planning/quietHours";
 import { extractMoodFromImage, type MoodResult } from "@/lib/ai/mood";
 import { retrieveVenues } from "@/lib/ai/rag";
@@ -55,6 +54,8 @@ import {
   type PlanStop,
   type TimeSlot,
 } from "@/lib/ai/plan";
+import { composeDay, type SlotPool } from "@/lib/ai/composeDay";
+import { computeHorizonEnd } from "@/lib/planning/horizon";
 import {
   buildBusyIntervals,
   findFreeWindows,
@@ -87,6 +88,10 @@ const MIN_WINDOW_MINUTES = 60;
 const MAX_PLANNED_WINDOWS = 3;
 // Day-wide AI venue cap. Total stops across all windows in one request.
 const MAX_TOTAL_STOPS = 5;
+// Stage flag (Design Doc §11): when "1", use the whole-day composition path
+// instead of the per-slot generate loop. Unset = legacy per-slot loop (safe
+// default while the new path is validated).
+const USE_COMPOSE = process.env.PLAN_COMPOSE === "1";
 
 interface OrchestratorOptions {
   allowedNeighborhoods?: string[];
@@ -136,13 +141,7 @@ export async function POST(request: Request) {
     // Manual wins. If the user entered ANY manual events, ignore Google
     // Calendar entirely. Predictable for demo, eliminates surprise calls
     // showing up on the timeline.
-    // Cap the planning horizon at the end of the current day (midnight IST),
-    // so a late-evening generation plans only the rest of today rather than
-    // rolling a flat 16 hours into tomorrow morning. Whichever is sooner wins:
-    // the rolling cap, or end-of-day. Early-morning generations are unaffected
-    // (16h is sooner than midnight when you generate before ~8 AM).
-    const requestedHoursAhead = options.hoursAhead ?? DEFAULT_HOURS_AHEAD;
-    const hoursAhead = Math.min(requestedHoursAhead, hoursUntilDayEnd());
+    const hoursAhead = options.hoursAhead ?? DEFAULT_HOURS_AHEAD;
     const manualEvents = manualEntriesToEvents(options.manualEntries ?? []);
     const calendarEvents =
       manualEvents.length > 0
@@ -184,7 +183,17 @@ export async function POST(request: Request) {
     }
 
     // ---- Free window discovery + prioritization ----
-    const allFreeWindows = findFreeWindows(events, hoursAhead, MIN_WINDOW_MINUTES);
+    // Single-day cap (Design Doc §11 / horizon.ts): never let a window spill
+    // past tonight's IST midnight. end = min(now + hoursAhead, midnight).
+    // A 21:00 generation stops at 00:00; a 06:00 generation keeps the full 16h.
+    const now = new Date();
+    const horizonEnd = computeHorizonEnd(now, now, hoursAhead);
+    const allFreeWindows = findFreeWindows(events, hoursAhead, MIN_WINDOW_MINUTES)
+      .filter((w) => w.start < horizonEnd)
+      .map((w) => (w.end > horizonEnd ? { ...w, end: horizonEnd } : w))
+      .filter(
+        (w) => (w.end.getTime() - w.start.getTime()) / 60000 >= MIN_WINDOW_MINUTES,
+      );
     if (allFreeWindows.length === 0) {
       return NextResponse.json({
         windows: [],
@@ -244,9 +253,70 @@ export async function POST(request: Request) {
       const biasPoint = pickBiasPoint(events, window.start);
       const stops: PlanStop[] = [];
       let totalCandidatesSeen = 0;
+      let windowSummary = "";
 
+      // ---- Composition path (Design Doc §11) ----
+      // Build candidate pools for every slot (same RAG call as legacy), then
+      // compose + sequence the whole window in ONE Groq call. The cage inside
+      // composeDay enforces the hard rules (no food-after-food, >=1 interest
+      // venue); cross-window dedupe and category diversity are preserved via
+      // the day-wide used sets seeded into retrieval below.
+      if (USE_COMPOSE) {
+        const pools: SlotPool[] = [];
+        for (const slot of slots) {
+          const excludeCategories = usedCategories.filter(
+            (c) => !(repeatableCats as Set<string>).has(c),
+          );
+          const candidates = await retrieveVenues({
+            dietaryTags: user.dietary_tags ?? [],
+            interestTags: userInterests,
+            moodVibes: effectiveVibes.length > 0 ? effectiveVibes : undefined,
+            windowStart: slot.startDate,
+            windowEnd: slot.endDate,
+            biasLat: biasPoint.lat,
+            biasLng: biasPoint.lng,
+            allowedCategories: options.allowedCategories,
+            allowedNeighborhoods: options.allowedNeighborhoods,
+            maxPriceTier: options.maxPriceTier,
+            excludeCategories,
+            timeOfDay: bucketForHour(slot.startDate),
+            topK: RAG_TOP_K + usedVenueIds.size,
+          });
+          const fresh = candidates.filter((c) => !usedVenueIds.has(c.venue.id));
+          totalCandidatesSeen += fresh.length;
+          if (fresh.length > 0) pools.push({ slot, candidates: fresh });
+        }
+
+        if (pools.length > 0) {
+          const composed = await composeDay({
+            pools,
+            vibes: effectiveVibes,
+            interestTags: userInterests,
+            // weather: TODO (Stage 3) — plumb the Open-Meteo weather + AQI here
+            // to enable weather-aware composition. composeDay's prompt and cage
+            // already accept and use it; this is the only missing wire.
+          });
+          windowSummary = composed.summary;
+          for (const stop of composed.stops) {
+            if (stopsBudget <= 0) break;
+            if (usedVenueIds.has(stop.venueId)) continue;
+            const srcSlot =
+              slots.find((s) => s.startTime === stop.startTime) ?? slots[0];
+            const stopStart = hhmmToDateInWindow(stop.startTime, srcSlot.startDate);
+            const stopEnd = hhmmToDateInWindow(stop.endTime, srcSlot.startDate);
+            if (overlapsAnyBusy(stopStart, stopEnd, busyIntervals)) continue;
+            stops.push(stop);
+            usedVenueIds.add(stop.venueId);
+            usedCategories.push(stop.category);
+            stopsBudget -= 1;
+          }
+        }
+      }
+
+      // ---- Legacy per-slot path (fallback when USE_COMPOSE is off) ----
       // Per-slot retrieval + generation.
       for (const slot of slots) {
+        if (USE_COMPOSE) break;
         if (stopsBudget <= 0) break;
 
         // Categories to exclude for THIS slot: previously used categories,
@@ -299,7 +369,7 @@ export async function POST(request: Request) {
         freeWindow: window,
         plan: {
           stops,
-          summary: "",
+          summary: windowSummary,
           aiGenerated: stops.length > 0,
         },
         candidatesCount: totalCandidatesSeen,

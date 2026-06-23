@@ -22,7 +22,12 @@ interface AgentStatusBarProps {
   onDisruption: (eventId: string) => void;
 }
 
-type SimulateType = "aqi_spike" | "rain" | "calendar_cancel" | "location_change" | "heat_alert";
+type SimulateType =
+  | "aqi_spike"
+  | "rain"
+  | "calendar_cancel"
+  | "location_change"
+  | "heat_alert";
 
 const SIMULATE_BUTTONS: {
   type: SimulateType;
@@ -32,8 +37,6 @@ const SIMULATE_BUTTONS: {
   { type: "aqi_spike", label: "AQI Spike", icon: "air" },
   { type: "rain", label: "Rain", icon: "rainy" },
   { type: "heat_alert", label: "Heat Alert", icon: "thermometer" },
-  { type: "calendar_cancel", label: "Plans Freed", icon: "event_available" },
-  { type: "location_change", label: "Location Change", icon: "location_on" },
 ];
 
 const SIMULATE_PAYLOADS: Record<SimulateType, object> = {
@@ -106,7 +109,7 @@ export function AgentStatusBar({ onDisruption }: AgentStatusBarProps) {
         setSimulating(null);
       }
     },
-    [simulating, onDisruption]
+    [simulating, onDisruption],
   );
 
   const lastPollLabel = monitor.lastPoll
